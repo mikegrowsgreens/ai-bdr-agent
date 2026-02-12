@@ -1,0 +1,1303 @@
+{
+  "name": "Directive 01: Lead Source (Toast Scraper)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "2356d348-91eb-4408-8d60-4e8466edefea",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2400,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 16,
+              "triggerAtMinute": 32
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-001",
+      "name": "Daily 6AM MT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2400,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// State Configuration - DIRECTIVE 01: Lead Source\n// Territory: Western states (WA, NV, MT, ID, AK)\n// PRODUCTION MODE: All territory states active\n\nconst targetStates = [\n  { \n    code: 'AK', \n    name: 'Alaska',\n    searchQueries: [\n      'site:toasttab.com/local Alaska restaurant',\n      'site:toasttab.com/local Anchorage restaurant',\n      'site:toasttab.com/local Fairbanks restaurant',\n      'site:toasttab.com/local Juneau restaurant'\n    ]\n  },\n  { \n    code: 'WA', \n    name: 'Washington',\n    searchQueries: [\n      'site:toasttab.com/local Washington restaurant',\n      'site:toasttab.com/local Seattle restaurant',\n      'site:toasttab.com/local Spokane restaurant',\n      'site:toasttab.com/local Tacoma restaurant',\n      'site:toasttab.com/local Vancouver WA restaurant',\n      'site:toasttab.com/local Bellevue restaurant',\n      'site:toasttab.com/local Olympia restaurant',\n      'site:toasttab.com/local Everett restaurant'\n    ]\n  },\n  { \n    code: 'NV', \n    name: 'Nevada',\n    searchQueries: [\n      'site:toasttab.com/local Nevada restaurant',\n      'site:toasttab.com/local Las Vegas restaurant',\n      'site:toasttab.com/local Reno restaurant',\n      'site:toasttab.com/local Henderson restaurant',\n      'site:toasttab.com/local North Las Vegas restaurant'\n    ]\n  },\n  { \n    code: 'MT', \n    name: 'Montana',\n    searchQueries: [\n      'site:toasttab.com/local Montana restaurant',\n      'site:toasttab.com/local Billings restaurant',\n      'site:toasttab.com/local Missoula restaurant',\n      'site:toasttab.com/local Bozeman restaurant',\n      'site:toasttab.com/local Great Falls restaurant'\n    ]\n  },\n  { \n    code: 'ID', \n    name: 'Idaho',\n    searchQueries: [\n      'site:toasttab.com/local Idaho restaurant',\n      'site:toasttab.com/local Boise restaurant',\n      'site:toasttab.com/local Meridian restaurant',\n      'site:toasttab.com/local Idaho Falls restaurant',\n      'site:toasttab.com/local Nampa restaurant',\n      'site:toasttab.com/local Coeur d Alene restaurant'\n    ]\n  }\n];\n\n// Configuration\nconst config = {\n  resultsPerSearch: 100,\n  batchSize: 5,\n  minDelay: 2000,\n  maxDelay: 5000\n};\n\n// Flatten all search queries\nconst allSearches = [];\ntargetStates.forEach(state => {\n  state.searchQueries.forEach(query => {\n    allSearches.push({\n      json: {\n        state_code: state.code,\n        state_name: state.name,\n        search_query: query,\n        config: config,\n        timestamp: new Date().toISOString()\n      }\n    });\n  });\n});\n\nreturn allSearches;"
+      },
+      "id": "9c0ad54d-1cfc-4b94-8fb3-9b732418d79f",
+      "name": "Generate Search Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1808,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Random delay between 3-8 seconds\nconst delayMs = Math.floor(Math.random() * 5000) + 3000;\nawait new Promise(resolve => setTimeout(resolve, delayMs));\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1552,
+        -208
+      ],
+      "id": "581f571d-9889-41d3-a9eb-1f19a5cf75a4",
+      "name": "Wait"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-KEY",
+              "value": "YOUR_HUNTER_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"q\": \"{{ $json.search_query }}\",\n  \"num\": {{ $json.config.resultsPerSearch }},\n  \"gl\": \"us\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1296,
+        -208
+      ],
+      "id": "a6f683f4-6eab-4f7b-b894-b3f537e305ed",
+      "name": "Search Google for Toast Restaurants"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Serper search results\nconst items = $input.all();\n\n// Just pass through the Serper results\n// The next node (Extract & Deduplicate URLs) will handle the extraction\nreturn items.map(item => ({\n  json: {\n    ...item.json\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1056,
+        -208
+      ],
+      "id": "4b324fbf-2b58-42fe-bf6e-b2182906a021",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Extract & Deduplicate URLs (with existing leads sheet dedup)\n// \n// This node runs AFTER the Google Sheets \"Read Existing Leads\" node\n// which reads from sheet YOUR_GOOGLE_SHEET_ID\n// tab \"Main\" to get existing Restaurant IDs/URLs\n//\n// INPUT: Search results + existing leads data\n// OUTPUT: Deduplicated Toast restaurant URLs not already in your sheet\n// ============================================================\n\nconst items = $input.all();\nconst allUrls = new Set();\nconst urlToStateMap = {};\n\n// Build set of existing restaurant URLs/IDs from your leads sheet\n// This comes from the \"Read Existing Leads\" node earlier in the workflow\nconst existingUrls = new Set();\ntry {\n  const existingLeads = $('Read Existing Leads').all();\n  for (const lead of existingLeads) {\n    const restaurantId = lead.json['Restaurant ID'] || lead.json['restaurant_id'] || '';\n    if (restaurantId) {\n      // Normalize: strip query params, trailing slashes\n      const cleanId = restaurantId.split('?')[0].split('#')[0].replace(/\\/+$/, '');\n      existingUrls.add(cleanId);\n      existingUrls.add(cleanId.toLowerCase());\n    }\n    // Also check by URL if there's a separate field\n    const url = lead.json['URL'] || lead.json['url'] || lead.json['Source URL'] || '';\n    if (url && url.includes('toasttab.com')) {\n      const cleanUrl = url.split('?')[0].split('#')[0].replace(/\\/+$/, '');\n      existingUrls.add(cleanUrl);\n      existingUrls.add(cleanUrl.toLowerCase());\n    }\n  }\n} catch (e) {\n  // If Read Existing Leads node doesn't exist yet or has no data, continue without dedup\n  console.log('Note: Could not read existing leads for dedup. Continuing without cross-reference.');\n}\n\nconsole.log(`Loaded ${existingUrls.size} existing URLs/IDs for dedup`);\n\n// Process search results\nfor (const item of items) {\n  const organic = item.json.organic || [];\n  const stateCode = item.json.state_code;\n  const stateName = item.json.state_name;\n  const searchQuery = item.json.search_query;\n\n  for (const result of organic) {\n    const link = result.link || '';\n\n    // Only process Toast restaurant URLs\n    if (link.includes('toasttab.com/local/') && link.includes('/r-')) {\n      const cleanUrl = link.split('?')[0].split('#')[0].replace(/\\/+$/, '');\n\n      // Skip if already in this run's results\n      if (allUrls.has(cleanUrl)) continue;\n\n      // Skip if already in existing leads sheet\n      if (existingUrls.has(cleanUrl) || existingUrls.has(cleanUrl.toLowerCase())) {\n        console.log(`DEDUP: Skipping existing lead: ${cleanUrl}`);\n        continue;\n      }\n\n      allUrls.add(cleanUrl);\n      urlToStateMap[cleanUrl] = {\n        state_code: stateCode,\n        state_name: stateName,\n        found_via_query: searchQuery,\n        title: result.title || '',\n        snippet: result.snippet || ''\n      };\n    }\n  }\n}\n\n// Convert to array\nconst results = [];\nlet position = 1;\nfor (const url of allUrls) {\n  const metadata = urlToStateMap[url];\n  results.push({\n    json: {\n      restaurant_url: url,\n      state_code: metadata.state_code,\n      state_name: metadata.state_name,\n      found_via_query: metadata.found_via_query,\n      search_result_title: metadata.title,\n      search_result_snippet: metadata.snippet,\n      position_in_list: position++,\n      config: $('Generate Search Queries').first().json.config,\n      status: 'pending',\n      timestamp: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`Found ${results.length} unique NEW restaurants (${existingUrls.size / 2} existing leads skipped)`);\n\nif (results.length === 0) {\n  return [{ json: { message: 'No new restaurants found', total_searched: allUrls.size, existing_skipped: existingUrls.size } }];\n}\n\nreturn results;"
+      },
+      "id": "8f6d586d-f068-4192-b30e-656a9c7d6ce1",
+      "name": "Extract & Deduplicate URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nconst validStates = new Set([\n  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',\n  'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',\n  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT',\n  'VA','WA','WV','WI','WY','DC'\n]);\n\nconst targetStates = new Set(['AK','WA','NV','MT','ID']);\n\nfor (const item of items) {\n  const title = item.json.search_result_title || '';\n  const snippet = item.json.search_result_snippet || '';\n  const url = item.json.restaurant_url || '';\n  const queryState = (item.json.state_code || '').toUpperCase();\n  \n  // STEP 1: Extract slug from URL\n  const slugMatch = url.match(/\\/local\\/(?:order\\/)?([^\\/]+)\\/r-/);\n  const slug = slugMatch ? slugMatch[1] : '';\n  \n  // STEP 2: Clean business name from title\n  let businessName = title\n    .replace(/\\s*\\|\\s*Toast\\s*/gi, '')\n    .replace(/\\s*-\\s*Order Online\\s*/gi, '')\n    .replace(/\\s*-\\s*ToastTab\\s*/gi, '')\n    .replace(/\\s*\\|\\s*Order Online\\s*/gi, '')\n    .trim();\n  \n  if (businessName.includes(' - ')) {\n    businessName = businessName.split(' - ')[0].trim();\n  }\n  \n  // Fix ALL CAPS duplicates: \"ALASKA SALMON BAKE Alaska Salmon Bake\"\n  const words = businessName.split(/\\s+/);\n  if (words.length >= 4) {\n    const half = Math.floor(words.length / 2);\n    const firstHalf = words.slice(0, half).join(' ').toLowerCase();\n    const secondHalf = words.slice(half).join(' ').toLowerCase();\n    if (firstHalf === secondHalf) {\n      businessName = words.slice(half).join(' ');\n    }\n  }\n  \n  // STEP 3: Remove address from name using slug intelligence\n  if (slug) {\n    const slugParts = slug.split('-');\n    let nameEndIdx = slugParts.length;\n    for (let i = 1; i < slugParts.length; i++) {\n      if (/^\\d{2,5}$/.test(slugParts[i])) {\n        nameEndIdx = i;\n        break;\n      }\n    }\n    const slugName = slugParts.slice(0, nameEndIdx).join(' ');\n    \n    if (slugName && slugName.length < businessName.length * 0.8) {\n      businessName = businessName.replace(\n        /\\s+\\d{1,5}\\s+[A-Za-z\\s\\.#\\d]+(?:St(?:reet)?|Ave(?:nue)?|Blvd|Dr(?:ive)?|Rd|Ln|Way|Pkwy|Ct|Pl|Cir|Hwy|Road|Boulevard|Avenue|Street|Place|Court|Circle|Lane|Drive)\\s*(?:#\\s*\\d+)?\\.?\\s*$/i,\n        ''\n      ).trim();\n    }\n  }\n  \n  businessName = businessName.replace(/\\s*#\\d+\\s*$/, '').trim();\n  businessName = businessName.replace(/\\s+\\d{3,5}\\s*$/, '').trim();\n  \n  // STEP 4: Parse address, city, state from snippet\n  let address = '';\n  let city = '';\n  let state = '';\n  let phone = '';\n  \n  const addrMatch = snippet.match(/(\\d+\\s+[^,]+),\\s*([A-Za-z\\s\\.]+),\\s*([A-Z]{2})\\s*(\\d{5})?/);\n  if (addrMatch) {\n    address = addrMatch[0].trim();\n    city = addrMatch[2].trim();\n    state = addrMatch[3].trim().toUpperCase();\n  }\n  \n  const phoneMatch = snippet.match(/\\(?\\d{3}\\)?[\\s.\\-]?\\d{3}[\\s.\\-]?\\d{4}/);\n  if (phoneMatch) {\n    phone = phoneMatch[0];\n  }\n  \n  // STEP 5: State validation and fallback\n  if (!state || !validStates.has(state)) {\n    state = queryState;\n  }\n  \n  // STEP 6: Filter out-of-territory false positives\n  if (addrMatch && addrMatch[3] && !targetStates.has(addrMatch[3])) {\n    continue;\n  }\n  \n  if (!businessName) continue;\n  \n  results.push({\n    json: {\n      business_name: businessName,\n      address: address,\n      city: city,\n      state: state,\n      phone: phone,\n      source_url: url,\n      state_name: item.json.state_name || '',\n      status: 'extracted_from_search',\n      scraped_at: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`Extracted ${results.length} leads from ${items.length} search results`);\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        -208
+      ],
+      "id": "287918d7-8a3f-48fb-ab0b-1f0708942eb5",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DIRECTIVE 01: Dedup against leads_master and suppression\n// Checks: normalized_name+city+state, phone (last 10 digits), root_domain\n// Also checks suppression list for permanent blocks\n\nconst newLeads = $('Code in JavaScript2').all();\nconst existingLeads = $('Read Dedup Keys').all();\nconst suppressionList = $('Read Suppression List').all();\n\n// Build lookup sets from existing leads\nconst existingNames = new Set();\nconst existingPhones = new Set();\nconst existingDomains = new Set();\n\nfor (const lead of existingLeads) {\n  const d = lead.json;\n  if (d.normalized_name && d.city && d.state) {\n    existingNames.add(`${d.normalized_name}|${d.city}|${d.state}`.toLowerCase());\n  }\n  if (d.phone) {\n    const digits = String(d.phone).replace(/\\D/g, '').slice(-10);\n    if (digits.length === 10) existingPhones.add(digits);\n  }\n  if (d.root_domain) {\n    existingDomains.add(d.root_domain.toLowerCase());\n  }\n}\n\n// Build suppression set\nconst suppressedNames = new Set();\nfor (const s of suppressionList) {\n  const d = s.json;\n  if (d.business_name && d.city) {\n    suppressedNames.add(`${d.business_name}|${d.city}`.toLowerCase().trim());\n  }\n}\n\n// Helper functions\nfunction normalizeName(name) {\n  let n = name.toLowerCase().trim();\n  n = n.replace(/\\b(the|llc|inc|corp|corporation|ltd)\\b/g, '');\n  n = n.replace(/[^\\w\\s]/g, '');\n  n = n.replace(/\\s+/g, ' ').trim();\n  return n;\n}\n\nfunction cleanPhone(phone) {\n  const digits = String(phone || '').replace(/\\D/g, '');\n  return digits.length >= 10 ? digits.slice(-10) : '';\n}\n\nfunction extractRootDomain(url) {\n  if (!url) return '';\n  let d = url.toLowerCase().trim();\n  d = d.replace(/^https?:\\/\\//, '');\n  d = d.replace(/^www\\./, '');\n  d = d.split('/')[0].split('?')[0];\n  return d;\n}\n\n// Filter new leads\nconst passed = [];\nconst duped = [];\n\nfor (const lead of newLeads) {\n  const d = lead.json;\n  const normalizedName = normalizeName(d.business_name || '');\n  const city = (d.city || '').toLowerCase().trim();\n  const state = (d.state || '').toLowerCase().trim();\n  const phone = cleanPhone(d.phone);\n  const sourceUrl = d.source_url || '';\n  const rootDomain = extractRootDomain(sourceUrl);\n  \n  let isDup = false;\n  let dupReason = '';\n  \n  // Check suppression\n  if (suppressedNames.has(`${d.business_name}|${city}`.toLowerCase())) {\n    isDup = true;\n    dupReason = 'suppression_list';\n  }\n  \n  // Check name+city+state\n  if (!isDup && normalizedName && city && state) {\n    const key = `${normalizedName}|${city}|${state}`;\n    if (existingNames.has(key)) {\n      isDup = true;\n      dupReason = 'name_city_state';\n    }\n  }\n  \n  // Check phone\n  if (!isDup && phone) {\n    if (existingPhones.has(phone)) {\n      isDup = true;\n      dupReason = 'phone';\n    }\n  }\n  \n  // Check root domain (skip toasttab.com)\n  if (!isDup && rootDomain && !rootDomain.includes('toasttab.com')) {\n    if (existingDomains.has(rootDomain)) {\n      isDup = true;\n      dupReason = 'root_domain';\n    }\n  }\n  \n  if (isDup) {\n    duped.push({ json: { ...d, dup_reason: dupReason } });\n  } else {\n    // Add to sets so we don't pass duplicates within this batch\n    if (normalizedName && city && state) {\n      existingNames.add(`${normalizedName}|${city}|${state}`);\n    }\n    if (phone) existingPhones.add(phone);\n    if (rootDomain && !rootDomain.includes('toasttab.com')) {\n      existingDomains.add(rootDomain);\n    }\n    passed.push({ json: { ...d, normalized_name: normalizedName, root_domain: rootDomain, clean_phone: phone } });\n  }\n}\n\nconsole.log(`Dedup results: ${passed.length} new, ${duped.length} duplicates`);\n\nif (passed.length === 0) {\n  return [{ json: { _empty: true, message: 'All leads were duplicates', total_checked: newLeads.length, duplicates: duped.length } }];\n}\n\nreturn passed;"
+      },
+      "id": "dedup-against-existing-001",
+      "name": "Dedup Against Existing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// DIRECTIVE 01: Transform to leads_master schema\n// Generates UUID, maps fields to 50-column schema\n\nconst items = $input.all();\n\n// Skip if empty result from dedup\nif (items.length === 1 && items[0].json._empty) {\n  console.log('No new leads to write. ' + items[0].json.message);\n  return [];\n}\n\nfunction generateUUID() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    const r = Math.random() * 16 | 0;\n    const v = c === 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\nconst now = new Date().toISOString();\nconst results = [];\n\nfor (const item of items) {\n  const d = item.json;\n  \n  // Skip if no business name\n  if (!d.business_name) continue;\n  \n  results.push({\n    json: {\n      lead_id: generateUUID(),\n      business_name: d.business_name || '',\n      normalized_name: d.normalized_name || '',\n      address: d.address || '',\n      city: d.city || '',\n      state: d.state || '',\n      phone: d.clean_phone || '',\n      website: '',\n      root_domain: d.root_domain || '',\n      cuisine_type: '',\n      source: 'toast_local',\n      source_url: d.source_url || '',\n      discovered_at: now,\n      territory: 'west',\n      pos_name: 'Toast',\n      pos_confidence: 'high',\n      online_ordering: '',\n      delivery_partners: '',\n      doordash: '',\n      ubereats: '',\n      grubhub: '',\n      first_party_delivery: '',\n      google_rating: '',\n      google_review_count: '',\n      google_price_level: '',\n      google_place_id: '',\n      contact_name: '',\n      contact_title: '',\n      contact_email: '',\n      contact_confidence: '',\n      contact_verified: '',\n      contact_2_name: '',\n      contact_2_email: '',\n      enrichment_completeness: '',\n      score: '',\n      score_delivery: '',\n      score_business: '',\n      score_contact: '',\n      score_techstack: '',\n      status: 'pending_enrichment',\n      email_subject: '',\n      email_body: '',\n      email_sent_at: '',\n      reply_received_at: '',\n      reply_classification: '',\n      followup_1_sent: '',\n      followup_2_sent: '',\n      breakup_sent: '',\n      demo_booked_at: '',\n      notes: 'Toast Local scraper - ' + now.split('T')[0]\n    }\n  });\n}\n\nconsole.log(`Transformed ${results.length} leads to leads_master schema`);\nreturn results;"
+      },
+      "id": "transform-to-schema-001",
+      "name": "Transform to Schema",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "lead_id",
+              "displayName": "lead_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "business_name",
+              "displayName": "business_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "normalized_name",
+              "displayName": "normalized_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "address",
+              "displayName": "address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "state",
+              "displayName": "state",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "website",
+              "displayName": "website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "root_domain",
+              "displayName": "root_domain",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cuisine_type",
+              "displayName": "cuisine_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source_url",
+              "displayName": "source_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "discovered_at",
+              "displayName": "discovered_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "territory",
+              "displayName": "territory",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "pos_name",
+              "displayName": "pos_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "pos_confidence",
+              "displayName": "pos_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "online_ordering",
+              "displayName": "online_ordering",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "delivery_partners",
+              "displayName": "delivery_partners",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doordash",
+              "displayName": "doordash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ubereats",
+              "displayName": "ubereats",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "grubhub",
+              "displayName": "grubhub",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "first_party_delivery",
+              "displayName": "first_party_delivery",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "google_rating",
+              "displayName": "google_rating",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "google_review_count",
+              "displayName": "google_review_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "google_price_level",
+              "displayName": "google_price_level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "google_place_id",
+              "displayName": "google_place_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "contact_name",
+              "displayName": "contact_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "contact_title",
+              "displayName": "contact_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "contact_email",
+              "displayName": "contact_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "contact_confidence",
+              "displayName": "contact_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "contact_verified",
+              "displayName": "contact_verified",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "contact_2_name",
+              "displayName": "contact_2_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "contact_2_email",
+              "displayName": "contact_2_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "enrichment_completeness",
+              "displayName": "enrichment_completeness",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score",
+              "displayName": "score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score_delivery",
+              "displayName": "score_delivery",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score_business",
+              "displayName": "score_business",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score_contact",
+              "displayName": "score_contact",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score_techstack",
+              "displayName": "score_techstack",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email_subject",
+              "displayName": "email_subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email_body",
+              "displayName": "email_body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email_sent_at",
+              "displayName": "email_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reply_received_at",
+              "displayName": "reply_received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reply_classification",
+              "displayName": "reply_classification",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "followup_1_sent",
+              "displayName": "followup_1_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "followup_2_sent",
+              "displayName": "followup_2_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "breakup_sent",
+              "displayName": "breakup_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "demo_booked_at",
+              "displayName": "demo_booked_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "write-leads-master-001",
+      "name": "Write to leads_master",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        550,
+        -200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## DIRECTIVE 01: Lead Source (Shipday Outbound System v2.0)\n\n**Flow:** Trigger -> Generate Queries (AK test) -> Serper Search -> Extract URLs -> Extract Data from Snippets -> Read leads_master + suppression -> Dedup -> Transform to Schema -> Write to leads_master\n\n**Dedup checks:** normalized_name+city+state, phone (last 10 digits), root_domain\n**Output:** New leads appended to leads_master with status 'pending_enrichment'\n**Next:** Enrichment workflow (Directive 02) picks up pending_enrichment leads",
+        "height": 300,
+        "width": 2900,
+        "color": 4
+      },
+      "id": "sticky-directive-01",
+      "name": "Directive 01: Lead Source",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2496,
+        -608
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## DEPRECATED NODES (from v1)\nThese nodes are kept for reference but are not connected to the active workflow.\nEmail enrichment has moved to the Enrichment workflow (Directive 02).",
+        "height": 200,
+        "width": 2800,
+        "color": 2
+      },
+      "id": "sticky-old-nodes",
+      "name": "Deprecated v1 Nodes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2496,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 5,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "old-57a8c630-090f-480a-8",
+      "name": "[OLD] Batch Restaurants",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -2144,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "=5"
+      },
+      "id": "old-a7713a54-9c76-4c44-9",
+      "name": "[OLD] Random Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -1904,
+        304
+      ],
+      "webhookId": "random-delay-webhook-001"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-KEY",
+              "value": "YOUR_HUNTER_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"q\": \"{{ $json.business_name || 'restaurant' }} {{ $json.city || $json.state }} email contact\",\n  \"num\": 10,\n  \"gl\": \"us\"\n}",
+        "options": {}
+      },
+      "id": "old-682963af-6528-4e34-a",
+      "name": "[OLD] Search for Emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1408,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"messages\": [{ \"role\": \"user\", \"content\": \"Extract all email addresses from this data. Return ONLY a JSON array: [\\\"email1@domain.com\\\", \\\"email2@domain.com\\\"]. Include business emails (info@, contact@, orders@). Exclude: noreply@, support@wix.com, @facebook.com, test@, example.com. If no emails return [].\\n\\nData: \" + JSON.stringify($json) }] } }}",
+        "options": {}
+      },
+      "id": "old-5704893d-5368-4907-9",
+      "name": "[OLD] Claude Extract Emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1152,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge enrichment data back using indexed matching\nconst restaurantItems = $('Prepare Code').all();\nconst claudeItems = $input.all();\n\nconst results = [];\n\nfor (let i = 0; i < claudeItems.length; i++) {\n  const restaurantData = restaurantItems[i].json;\n  const claudeResponse = claudeItems[i].json;\n  \n  let extractedEmails = [];\n  \n  try {\n    const responseText = claudeResponse.content?.[0]?.text || '[]';\n    const jsonMatch = responseText.match(/\\[.*?\\]/s);\n    if (jsonMatch) {\n      extractedEmails = JSON.parse(jsonMatch[0]);\n    }\n  } catch (e) {\n    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;\n    const text = JSON.stringify(claudeResponse);\n    extractedEmails = text.match(emailRegex) || [];\n  }\n  \n  const output = { ...restaurantData };\n  \n  if (extractedEmails.length > 0) {\n    const allEmails = [...new Set([...(output.emails || []), ...extractedEmails])];\n    output.emails = allEmails;\n    output.needs_email_enrichment = false;\n    output.enrichment_status = 'success';\n  } else {\n    output.enrichment_status = 'no_emails_found';\n  }\n  \n  results.push({ json: output });\n}\n\nreturn results;"
+      },
+      "id": "old-bb086336-12e9-476d-9",
+      "name": "[OLD] Merge Enrichment Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all results and sort\nconst items = $input.all();\n\nconst sorted = items.sort((a, b) => {\n  if (a.json.state !== b.json.state) {\n    return a.json.state.localeCompare(b.json.state);\n  }\n  return (a.json.business_name || '').localeCompare(b.json.business_name || '');\n});\n\nreturn sorted.map(item => ({ json: item.json }));"
+      },
+      "id": "old-e2609e19-de26-4229-b",
+      "name": "[OLD] Collect & Sort Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Scraper",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Restaurant ID",
+              "displayName": "Restaurant ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Business Name",
+              "displayName": "Business Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Address",
+              "displayName": "Address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "City",
+              "displayName": "City",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "State",
+              "displayName": "State",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Website",
+              "displayName": "Website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Cuisine Type",
+              "displayName": "Cuisine Type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Primary Email",
+              "displayName": "Primary Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "All Emails",
+              "displayName": "All Emails",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Enrichment Confidence",
+              "displayName": "Enrichment Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Last Enriched",
+              "displayName": "Last Enriched",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "old-af14361c-4f70-4b7d-8",
+      "name": "[OLD] Write to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -144,
+        304
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const emails = item.json.emails || [];\n  \n  results.push({\n    json: {\n      'Restaurant ID': item.json.source_url || '',\n      'Business Name': item.json.business_name || '',\n      'Address': item.json.address || '',\n      'City': item.json.city || '',\n      'State': item.json.state || '',\n      'Phone': item.json.phone || '',\n      'Website': item.json.website || '',\n      'Cuisine Type': item.json.cuisine_type || '',\n      'Status': emails.length > 0 ? 'Email Found' : 'No Email Found',\n      'Primary Email': emails[0] || '',\n      'All Emails': emails.slice(0, 5).join(', '),\n      'Enrichment Confidence': emails.length > 0 ? '0.85' : '0.00',\n      'Last Enriched': new Date().toISOString().split('T')[0]\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        304
+      ],
+      "id": "old-07813521-6f8b-4726-9",
+      "name": "[OLD] Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const businessName = item.json.business_name || '';\n  \n  // Build clean search query\n  const query = `${businessName} Connecticut contact email facebook`;\n  \n  results.push({\n    json: {\n      ...item.json,\n      search_query: query\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1648,
+        304
+      ],
+      "id": "old-56b9cdb1-07e1-4491-a",
+      "name": "[OLD] Prepare Code"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Main",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2400,
+        304
+      ],
+      "id": "old-d55f01b0-3583-46d4-8",
+      "name": "[OLD] Read Existing Leads",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "options": {
+          "range": "leads_master!A1:I"
+        }
+      },
+      "id": "read-dedup-keys-001",
+      "name": "Read Dedup Keys",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -300,
+        -200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "suppression",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-suppression-002",
+      "name": "Read Suppression List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -300,
+        -400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "ewt-Ye4TNrjM",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2746,
+        -208
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Generate Search Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 6AM MT": {
+      "main": [
+        [
+          {
+            "node": "Generate Search Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Search Queries": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Search Google for Toast Restaurants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Google for Toast Restaurants": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Extract & Deduplicate URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Deduplicate URLs": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Read Dedup Keys",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Suppression List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup Against Existing": {
+      "main": [
+        [
+          {
+            "node": "Transform to Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform to Schema": {
+      "main": [
+        [
+          {
+            "node": "Write to leads_master",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Dedup Keys": {
+      "main": [
+        [
+          {
+            "node": "Dedup Against Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Suppression List": {
+      "main": [
+        [
+          {
+            "node": "Dedup Against Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Generate Search Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

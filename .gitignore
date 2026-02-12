@@ -1,0 +1,16 @@
+# Credentials and secrets
+*.env
+.env.*
+credentials/
+secrets/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Node
+node_modules/

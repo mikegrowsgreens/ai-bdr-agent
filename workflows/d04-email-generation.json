@@ -1,0 +1,354 @@
+{
+  "name": "Directive 04: Email Generation",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -608,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-scored",
+      "name": "Read Scored Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -384,
+        48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter: scored leads with email, score >= 50, no email_subject yet\nconst items = $input.all();\nconst BATCH_SIZE = 10;\nconst MIN_SCORE = 50;\n\nconst eligible = items.filter(item => {\n  const lead = item.json;\n  const score = parseInt(lead.score) || 0;\n  const email = lead.contact_email || '';\n  const status = lead.status || '';\n  const existingSubject = lead.email_subject || '';\n  \n  return status === 'scored' \n    && score >= MIN_SCORE \n    && email \n    && !existingSubject;\n});\n\nconsole.log(`Found ${eligible.length} eligible leads (score >= ${MIN_SCORE}, has email, no existing email)`);\n\nconst batch = eligible.slice(0, BATCH_SIZE);\nconsole.log(`Processing batch of ${batch.length}`);\n\nif (batch.length === 0) {\n  return [{ json: { _empty: true, message: 'No eligible leads for email generation' } }];\n}\n\nreturn batch;"
+      },
+      "id": "filter-eligible",
+      "name": "Filter Eligible",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "loop-leads",
+      "name": "Loop Over Leads",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        64,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build personalized cold email prompt - AI Receptionist lead\nconst lead = $input.first().json;\n\nconst contactName = lead.contact_name || '';\nconst firstName = contactName.split(' ')[0] || '';\nconst contactTitle = lead.contact_title || '';\nconst businessName = lead.business_name || '';\nconst cuisineType = (lead.cuisine_type || 'restaurant').toLowerCase();\nconst city = lead.city || '';\nconst state = lead.state || '';\nconst rating = lead.google_rating || '';\nconst reviewCount = lead.google_review_count || '';\nconst priceLevel = lead.price_level || '';\nconst website = lead.website || '';\n\n// Build personalization signals\nconst signals = [];\nif (parseFloat(rating) >= 4.0) signals.push(`Strong Google rating: ${rating}/5`);\nif (parseInt(reviewCount) >= 200) signals.push(`Established customer base: ${reviewCount} reviews`);\nif (cuisineType && cuisineType !== 'american' && cuisineType !== 'restaurant') signals.push(`Cuisine type: ${cuisineType}`);\nif (priceLevel) signals.push(`Price point: ${priceLevel}`);\n\n// Parse price level to numeric (1-4 scale)\nlet priceNum = 0;\nif (priceLevel) {\n  if (priceLevel.includes('$$$$') || priceLevel === '4') priceNum = 4;\n  else if (priceLevel.includes('$$$') || priceLevel === '3') priceNum = 3;\n  else if (priceLevel.includes('$$') || priceLevel === '2') priceNum = 2;\n  else if (priceLevel.includes('$') || priceLevel === '1') priceNum = 1;\n}\n\n// Cuisine categories\nconst highValueCuisines = ['catering', 'bbq', 'barbecue', 'steakhouse', 'seafood', 'italian', 'fine dining', 'french', 'japanese', 'sushi'];\nconst highVolumeCuisines = ['pizza', 'chinese', 'thai', 'indian', 'mexican', 'korean', 'vietnamese', 'mediterranean', 'greek', 'middle eastern', 'wings', 'chicken'];\nconst lowerTicketCuisines = ['coffee', 'cafe', 'bakery', 'juice', 'tea', 'smoothie', 'ice cream', 'frozen yogurt', 'bagel', 'donut', 'deli', 'fast food'];\n\nconst isHighValue = highValueCuisines.some(c => cuisineType.includes(c));\nconst isHighVolume = highVolumeCuisines.some(c => cuisineType.includes(c));\nconst isLowerTicket = lowerTicketCuisines.some(c => cuisineType.includes(c));\n\n// Determine business tier based on cuisine + price level\nlet businessTier = 'mid';\nlet revenueClaim = '';\nlet avgOrderContext = '';\n\nif (isHighValue || priceNum >= 3) {\n  // High-value: catering, BBQ, steakhouse, fine dining, or $$$ and up\n  businessTier = 'high_value';\n  revenueClaim = 'Restaurants in your category typically recover $3,000-4,000/month from phone orders and catering calls that were going to voicemail.';\n  avgOrderContext = 'High average order value. Phone orders likely $50-200+ (catering even higher). Each missed call has significant revenue impact.';\n} else if (isHighVolume || (priceNum >= 2 && !isLowerTicket)) {\n  // High-volume delivery: pizza, Chinese, Thai, Indian, or $$ full-service\n  businessTier = 'high_volume';\n  revenueClaim = 'Most delivery-focused restaurants recover $1,500-3,000/month just by catching the calls that used to ring out during rush.';\n  avgOrderContext = 'Moderate order value but high call frequency. Delivery and \"where is my order\" calls stack up fast during peak hours.';\n} else if (isLowerTicket || priceNum <= 1) {\n  // Lower ticket: coffee, bakery, juice, fast food, or $ price point\n  businessTier = 'lower_ticket';\n  revenueClaim = 'Even with smaller orders, most cafes and shops recover $800-1,500/month from group orders, catering inquiries, and pickup calls that were getting missed.';\n  avgOrderContext = 'Lower individual ticket but steady volume. Group orders, catering, and event inquiries are the high-value calls to capture.';\n} else {\n  // Default mid-tier\n  businessTier = 'mid';\n  revenueClaim = 'Most restaurants recover $1,500-2,500/month in revenue from calls that used to go unanswered.';\n  avgOrderContext = 'Standard restaurant call patterns. Mix of order calls, status checks, and inquiries.';\n}\n\n// Determine pain angle\nlet painAngle = 'general';\nif (isHighValue) painAngle = 'high_value_orders';\nelse if (isHighVolume) painAngle = 'delivery_rush';\nelse if (isLowerTicket) painAngle = 'cafe_group_orders';\nelse painAngle = 'general';\n\nconst prompt = `You are writing a cold email from Mike Paulus at Shipday to a restaurant owner/manager. The PRIMARY value prop is Shipday's AI Receptionist.\n\nRECIPIENT:\n- Name: ${firstName || 'there'}\n- Title: ${contactTitle || 'Owner/Manager'}\n- Restaurant: ${businessName}\n- Cuisine: ${cuisineType}\n- Location: ${city}, ${state}\n- Google rating: ${rating}/5\n- Google reviews: ${reviewCount}\n- Price level: ${priceLevel}\n- Website: ${website}\n\nBUSINESS TIER: ${businessTier}\nPAIN ANGLE: ${painAngle}\nORDER CONTEXT: ${avgOrderContext}\n\nPERSONALIZATION SIGNALS:\n${signals.join('\\n') || 'No strong signals detected'}\n\nTHE CORE PROBLEM (use this to frame the email):\n- 43% of restaurant calls go unanswered during peak hours\n- Phone calls convert 3-5x higher than web orders\n- 30-40% of calls go unanswered during rush or after-hours\n- Customers who call are ready to order, ask about catering, or check delivery status\n- Most missed calls are never returned. Customers rarely try again.\n\nREVENUE CLAIM (use this exact framing, already calibrated to their business type):\n${revenueClaim}\n\nSHIPDAY AI RECEPTIONIST VALUE PROPS (pick 1-2, match to their situation):\n- Answers every call 24/7, so the restaurant is never \"busy\" or closed\n- Customer-aware: knows who is calling using order history and customer profiles (not a generic script)\n- Handles \"where's my order?\" calls by texting the customer a live tracking link so they can see their order status without speaking to a human\n- Texts the customer a link to place their order online (no human needed to take the order)\n- Sends live tracking for takeout and pickup orders via text\n- Captures high-intent callers (catering, large orders, events) and converts them to online orders automatically\n- Only alerts the owner for real sales opportunities or complaints that need attention\n- Recognizes repeat callers and references their past orders\n- 10-minute setup, works nights/weekends/holidays\n- Included in Shipday's unlimited plan for less than $12/day (standalone AI phone tools cost $300-500/mo on their own)\n- Break-even is just ~10 captured calls per month\n\nPAIN ANGLE GUIDANCE:\n- If cafe_group_orders: focus on catering inquiries, group/event orders, and hours/pickup questions that go unanswered. These are lower frequency but each one matters.\n- If delivery_rush: focus on call volume during peak hours, \"where's my order?\" flooding the phone, and order calls that ring out when the kitchen is slammed\n- If high_value_orders: focus on catering calls, large party reservations, and high-ticket phone orders going to voicemail. One missed catering call could be $500-2,000.\n- If general: focus on the universal missed-calls problem and the fact that phone callers are the most ready-to-buy customers\n\nSECONDARY VALUE PROPS (use as supporting point if relevant, not the lead):\n- Eliminates DoorDash/Uber Eats commissions on delivery orders\n- SMS promotions with 96%+ open rates\n- Automated Google review collection\n- Live tracking links sent to customers via text\n\nPRODUCT TRUTH (be accurate, never fabricate capabilities):\n- The AI answers calls and texts the CUSTOMER a link to place their order online\n- It does NOT take orders itself, it does NOT relay order details to staff\n- It texts the CUSTOMER live tracking links for pickup/takeout orders\n- It handles \"where is my order?\" by texting a tracking link (no human needed)\n- NEVER say the AI \"takes orders\", \"places orders\", \"texts you the details\", or \"relays orders to your team\"\n- The core mechanic: AI converts phone callers into online orders by texting them a link\n\nINTERNAL POSITIONING (follow this tone/approach):\n- Lead with outcomes, not technology. Do NOT say \"AI\" in the first sentence.\n- Frame it as: missed calls = missed revenue, and this fixes it\n- Think of Moin's mantra: \"You don't answer phones anymore. You only answer sales.\"\n- This is not replacing staff. It is capturing revenue that was walking away.\n- Do NOT mention that it cannot take orders. That is an objection to handle later.\n- Do NOT pitch it as \"AI for AI's sake.\" Position it as a revenue and support safety net.\n\nTONE RULES:\n- Write like a human who works in restaurant tech, not a salesperson\n- No preachy framing like \"here's the reality\" or \"let me be honest\" or \"the truth is\"\n- No condescending language. Assume they are smart and busy.\n- Conversational. Like a short note from someone who genuinely thinks this could help.\n- Warm but direct. Respectful of their time.\n\nEMAIL FORMAT RULES:\n1. Subject line: 6-10 words, no spam words, specific to their restaurant or pain\n2. Email body: 3-5 sentences max, no fluff, no buzzwords\n3. Open with something specific about THEIR business (rating, reviews, cuisine, volume)\n4. Connect the missed-calls problem to their specific situation naturally\n5. Introduce what Shipday does in one sentence (not feature-heavy)\n6. Use the revenue claim provided above (already calibrated to their business)\n7. Soft CTA: \"worth a quick look?\" or \"happy to show you how it works\" or \"want me to run your numbers?\"\n8. End with just \"Best\" on its own line. No comma after Best. Do NOT add a name, title, or company after it. A signature block is appended automatically.\n9. Do NOT use em dashes, en dashes, or any type of dash character (no --, no \u2013, no \u2014). Use commas or periods instead.\n10. Do NOT use exclamation marks\n11. No bullet points or lists in the email body\n12. No \"I hope this finds you well\" or any generic opener\n13. Each paragraph should be 1-2 sentences max for easy scanning\n14. NEVER mention a specific monthly dollar price for the plan (no $349, no $300/mo). Instead say \"our unlimited plan\" or \"less than $12 a day\" or \"included in our growth plan\". We want to avoid sticker shock.\n\nOUTPUT FORMAT (JSON only, no markdown):\n{\"subject\": \"...\", \"body\": \"...\"}`;\n\nreturn [{\n  json: {\n    ...lead,\n    _prompt: prompt\n  }\n}];"
+      },
+      "id": "build-prompt",
+      "name": "Build Claude Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 500, messages: [{ role: 'user', content: $json._prompt }] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "claude-api",
+      "name": "Claude Generate Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        512,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude response and extract email subject/body\nconst lead = $('Build Claude Prompt').first().json;\nconst response = $input.first().json;\n\nlet emailSubject = '';\nlet emailBody = '';\n\ntry {\n  const content = response.content?.[0]?.text || '';\n  \n  // Try to parse as JSON\n  let cleaned = content.trim();\n  // Remove markdown code blocks if present\n  cleaned = cleaned.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  \n  const parsed = JSON.parse(cleaned);\n  emailSubject = parsed.subject || '';\n  emailBody = parsed.body || '';\n} catch (e) {\n  console.log('Failed to parse Claude response as JSON:', e.message);\n  // Fallback: try to extract subject/body from text\n  const text = response.content?.[0]?.text || '';\n  const subjectMatch = text.match(/\"subject\"\\s*:\\s*\"([^\"]+)\"/);\n  const bodyMatch = text.match(/\"body\"\\s*:\\s*\"([\\s\\S]*?)\"\\s*}/);\n  if (subjectMatch) emailSubject = subjectMatch[1];\n  if (bodyMatch) emailBody = bodyMatch[1].replace(/\\\\n/g, '\\n');\n}\n\nreturn [{\n  json: {\n    lead_id: lead.lead_id,\n    email_subject: emailSubject,\n    email_body: emailBody,\n    status: 'email_ready'\n  }\n}];"
+      },
+      "id": "parse-email",
+      "name": "Parse Email Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        736,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "update-email",
+      "name": "Update Email in Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        960,
+        48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "rate-delay",
+      "name": "Rate Limit Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1184,
+        120
+      ],
+      "webhookId": "email-gen-delay-001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconsole.log(\"Email generation batch complete.\");\nreturn items;"
+      },
+      "id": "batch-complete",
+      "name": "Batch Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## DIRECTIVE 04: Email Generation (Claude API)\n\n**Flow:** Read scored leads (score >= 50, has email) -> Build personalized prompt -> Claude generates subject + body -> Write to leads_master -> status = 'email_ready'\n**Personalization:** Uses business name, cuisine, rating, reviews, city, contact name/title\n**Shipday Props:** Direct ordering, commission savings, review growth, SMS, live tracking\n**Batch:** 10 leads per run, 3s delay between Claude calls",
+        "height": 200,
+        "width": 2200,
+        "color": 4
+      },
+      "id": "sticky-email",
+      "name": "Directive 04: Email Gen",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        -256
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ewt-3GTeBVqb",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -954,
+        144
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Scored Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Scored Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter Eligible",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Eligible": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Leads": {
+      "main": [
+        [
+          {
+            "node": "Batch Complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Claude Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Claude Prompt": {
+      "main": [
+        [
+          {
+            "node": "Claude Generate Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Generate Email": {
+      "main": [
+        [
+          {
+            "node": "Parse Email Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Email Response": {
+      "main": [
+        [
+          {
+            "node": "Update Email in Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Email in Sheet": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Delay": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Scored Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

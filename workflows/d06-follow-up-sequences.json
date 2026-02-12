@@ -1,0 +1,503 @@
+{
+  "name": "Directive 06: Follow-Up Sequences",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 17,
+              "triggerAtMinute": 17
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 9am Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -944,
+        -48
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -944,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-sent",
+      "name": "Read All Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -720,
+        144
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter leads due for follow-up\nconst items = $input.all();\nconst BATCH_SIZE = 50;\n\n// Skip weekends\nconst dayOfWeek = new Date().getDay();\nif (dayOfWeek === 0 || dayOfWeek === 6) {\n  return [];\n}\nconst DAYS_BETWEEN_SENDS = 3;\nconst MAX_SENDS = 4; // initial + 3 follow-ups\n\nconst now = new Date();\nconst cutoff = new Date(now.getTime() - (DAYS_BETWEEN_SENDS * 24 * 60 * 60 * 1000));\n\nconst due = items.filter(item => {\n  const lead = item.json;\n  const status = lead.status || '';\n  const sendCount = parseInt(lead.send_count) || 0;\n  const lastSent = lead.last_sent_date ? new Date(lead.last_sent_date) : null;\n  const email = lead.contact_email || '';\n  \n  if (status !== 'sent') return false;\n  if (sendCount >= MAX_SENDS) return false;\n  if (!email) return false;\n  if (!lastSent || lastSent > cutoff) return false;\n  \n  return true;\n});\n\nconsole.log(`Found ${due.length} leads due for follow-up (sent > ${DAYS_BETWEEN_SENDS} days ago, < ${MAX_SENDS} sends)`);\n\nconst batch = due.slice(0, BATCH_SIZE);\nif (batch.length === 0) {\n  return [];\n}\nreturn batch;"
+      },
+      "id": "filter-due",
+      "name": "Filter Due for Follow-Up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "loop-followups",
+      "name": "Loop Over Follow-Ups",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -272,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build follow-up prompt - AI Receptionist focus with tier-calibrated ROI\nconst lead = $input.first().json;\n\n// Skip empty placeholder items from filter\nif (lead._empty || !lead.contact_email) {\n  return [{ json: { _skip: true, message: 'No valid lead data' } }];\n}\n\nconst contactName = lead.contact_name || '';\nconst firstName = contactName.split(' ')[0] || '';\nconst businessName = lead.business_name || '';\nconst cuisineType = (lead.cuisine_type || 'restaurant').toLowerCase();\nconst city = lead.city || '';\nconst state = lead.state || '';\nconst rating = lead.google_rating || '';\nconst reviewCount = lead.google_review_count || '';\nconst priceLevel = lead.google_price_level || '';\nconst sendCount = parseInt(lead.send_count) || 1;\nconst originalSubject = lead.email_subject || '';\n\n// Cuisine + price level tier logic (same as D04)\nconst highValueCuisines = ['catering', 'bbq', 'barbecue', 'steakhouse', 'steak', 'seafood', 'sushi', 'japanese', 'fine dining', 'italian', 'french'];\nconst highVolumeCuisines = ['pizza', 'chinese', 'thai', 'indian', 'mexican', 'korean', 'wings', 'chicken'];\nconst lowerTicketCuisines = ['coffee', 'cafe', 'bakery', 'juice', 'deli', 'fast food', 'sandwich', 'bagel', 'donut'];\n\nlet tier = 'mid';\nlet roiRange = '$1,500 to $2,500 a month';\n\nif (highValueCuisines.some(c => cuisineType.includes(c)) || priceLevel === '$$$' || priceLevel === '$$$$') {\n  tier = 'high_value';\n  roiRange = '$3,000 to $4,000 a month';\n} else if (highVolumeCuisines.some(c => cuisineType.includes(c)) || (priceLevel === '$$' && !lowerTicketCuisines.some(c => cuisineType.includes(c)))) {\n  tier = 'high_volume';\n  roiRange = '$1,500 to $3,000 a month';\n} else if (lowerTicketCuisines.some(c => cuisineType.includes(c)) || priceLevel === '$') {\n  tier = 'lower_ticket';\n  roiRange = '$800 to $1,500 a month';\n}\n\nconst followUpAngles = {\n  1: `This is follow-up #1. The initial email already pitched the AI Receptionist. Do NOT re-pitch or describe how the product works.\n\nSCENARIO SEEDS BY CUISINE TYPE (use the closest match as your starting point, write in your own words):\n- Coffee/cafe/bakery/boba: morning rush (8am), catering calls for office meetings, baristas too busy on the bar to answer\n- Pizza: Friday/Saturday dinner rush, phone ringing nonstop with delivery orders, new orders lost while staff handles in-house\n- Chinese/Thai/Asian: lunch rush takeout orders piling up, large family dinner orders, office lunch catering calls\n- Indian: lunch buffet rush, large group and family orders, weekend catering inquiries for events\n- Mexican: weekend catering inquiries (taco bars, burrito trays), large party call-aheads, Taco Tuesday rush\n- Italian: private dining bookings, large party reservations for weekends, corporate dinner inquiries\n- Japanese/sushi: omakase and special tasting reservations, large party bookings, high-value takeout orders\n- American/grill: happy hour overflow calls, catering inquiries for office lunches or events, large group reservations\n- Southern/BBQ/Cajun: weekend catering orders for parties and events, large platter orders, corporate BBQ catering\n- Korean: group dining reservations, Korean BBQ party bookings, office catering orders\n- Persian/Mediterranean: large family gathering orders, catering for events, weekend party reservations\n- Brewery/bar/drinking place: event bookings, large group reservations, food catering add-ons for private events\n- Quick service/fast food: drive-thru overflow, large corporate lunch orders called in, catering trays\n- Australian/cafe style: brunch rush, large group weekend reservations, catering for morning meetings\n- DEFAULT (anything else): peak hour phone calls going unanswered, catering or large group orders lost to whoever picks up first\n\nWrite exactly 3 elements, each on its own line with a blank line between them:\n\nELEMENT 1: A one-sentence reference that you reached out, plus a specific missed-call scenario using the seed above. Mention the realistic rush time and what staff is busy doing. Keep it to 1-2 sentences max.\n\nELEMENT 2: A short sentence driving home the financial pain. MUST mention money going to a competitor. Examples of tone: \"A couple of those a week adds up to hundreds going to a competitor.\" or \"That is real revenue walking to whoever picks up first.\"\n\nELEMENT 3: \"Any thoughts?\" on its own line.\n\nDo NOT copy any seed verbatim. Write it naturally for ${businessName} as a ${cuisineType} in ${city}.`,\n\n  2: `This is follow-up #2 (6 days after initial email).\nThis is a VALUE-ADD email. 2-3 sentences max.\nOffer them a free resource: the Shipday ROI calculator at https://shipday.mikegrowsgreens.com/\nFrame it as: \"Built a quick calculator that shows what missed calls actually cost based on your type of restaurant. Takes 30 seconds, no signup needed.\"\nThe calculator also shows how Shipday helps with delivery and marketing beyond just the AI receptionist.\nDo NOT be pushy. Position it as genuinely useful whether they buy or not.\nCTA: share the link naturally, like \"Here is the link if you want to run your numbers: https://shipday.mikegrowsgreens.com/\"`,\n\n  3: `This is follow-up #3 (final touch, 9+ days after initial).\nThis is the LAST email. Make it 2 sentences max.\nBreakup email style. Zero pressure. Something like:\n\"Figured the timing might not be right, totally get it. If you ever get tired of missed calls turning into lost orders, I am around.\"\nKeep it human. No features. Just acknowledge and leave the door open.`\n};\n\nconst angle = followUpAngles[sendCount] || followUpAngles[3];\n\nconst prompt = `You are writing a follow-up cold email from Mike Paulus at Shipday to a restaurant owner/manager who did not reply to the initial email about Shipday's AI Receptionist.\n\nRECIPIENT:\n- Name: ${firstName || 'there'}\n- Restaurant: ${businessName}\n- Cuisine: ${cuisineType}\n- Location: ${city}, ${state}\n- Google rating: ${rating}/5\n- Reviews: ${reviewCount}\n- Business tier: ${tier} (ROI range: ${roiRange})\n\nORIGINAL EMAIL SUBJECT: ${originalSubject}\n\nFOLLOW-UP CONTEXT:\n${angle}\n\nWHAT THE AI RECEPTIONIST ACTUALLY DOES (be accurate, never fabricate capabilities):\n- Answers calls 24/7 when staff cannot pick up\n- Texts the CUSTOMER a link to place their order online (it does NOT take orders itself, it does NOT relay orders to staff)\n- Sends the CUSTOMER live tracking links for pickup and takeout orders via text\n- Handles \"where is my order?\" calls by texting the customer a tracking link (no human needed)\n- Recognizes repeat callers from order history\n- Only alerts the owner/staff for real sales opportunities or issues that need human attention\n- NEVER say the AI \"takes orders\", \"places orders\", \"texts you the order details\", or \"relays orders to your team\"\n- The AI converts phone callers into online orders by texting them a link. That is the core mechanic.\n\nRULES:\n1. Subject line: \"Re: ${originalSubject}\"\n2. Email body: ${sendCount <= 2 ? '2-3 sentences' : '2 sentences max'}\n3. Casual, human, zero pressure\n4. Start with the recipient first name followed by a comma on its own line, then a blank line, then the body. Format: \"Chris,\\n\\nBody text here...\"\n5. End with just \"Best\" on its own line. No comma after Best. Do NOT add a name, title, or company after it.\n6. Do NOT use em dashes, en dashes, or any dash characters. Use commas or periods instead.\n7. Do NOT use exclamation marks\n8. NEVER mention a specific monthly dollar price (no $349, no $300/mo). Say \"our unlimited plan\" or \"less than $12 a day\"\n9. ROI claims MUST use this range only: ${roiRange}\n10. Each paragraph should be its own line separated by \\\\n\\\\n\n\nOUTPUT JSON only (no markdown):\n{\"subject\": \"Re: ${originalSubject}\", \"body\": \"paragraph one\\\\n\\\\nparagraph two\\\\n\\\\nBest\"}`;\n\nreturn [{\n  json: {\n    ...lead,\n    _prompt: prompt,\n    _follow_up_number: sendCount\n  }\n}];"
+      },
+      "id": "build-followup-prompt",
+      "name": "Build Follow-Up Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 300, messages: [{ role: 'user', content: $json._prompt }] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "claude-followup",
+      "name": "Claude Generate Follow-Up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        176,
+        168
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude follow-up response\nconst lead = $('Build Follow-Up Prompt').first().json;\nconst response = $input.first().json;\n\nlet subject = '';\nlet body = '';\n\ntry {\n  const content = response.content?.[0]?.text || '';\n  let cleaned = content.trim().replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  const parsed = JSON.parse(cleaned);\n  subject = parsed.subject || '';\n  body = parsed.body || '';\n} catch (e) {\n  const text = response.content?.[0]?.text || '';\n  const subjectMatch = text.match(/\"subject\"\\s*:\\s*\"([^\"]+)\"/);\n  const bodyMatch = text.match(/\"body\"\\s*:\\s*\"([\\s\\S]*?)\"\\s*}/);\n  if (subjectMatch) subject = subjectMatch[1];\n  if (bodyMatch) body = bodyMatch[1].replace(/\\\\n/g, '\\n');\n}\n\nreturn [{\n  json: {\n    lead_id: lead.lead_id,\n    contact_email: lead.contact_email,\n    _subject: subject,\n    _body: body,\n    _send_count: lead._follow_up_number + 1,\n    gmail_message_id: lead.gmail_message_id || '',\n    gmail_thread_id: lead.gmail_thread_id || ''\n  }\n}];"
+      },
+      "id": "parse-followup",
+      "name": "Parse Follow-Up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json._gmail_payload }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1072,
+        168
+      ],
+      "id": "send-followup",
+      "name": "Send Follow-Up Gmail",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Gmail"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Update tracking fields\nconst parsed = $('Parse Follow-Up').first().json;\nconst now = new Date().toISOString().split('T')[0];\nconst newCount = parsed._send_count;\n\nconst followup1 = newCount === 2 ? now : '';\nconst followup2 = newCount === 3 ? now : '';\nconst breakup = newCount === 4 ? now : '';\n\n// sequence_complete after 4 total sends (initial + 3 follow-ups)\nconst status = newCount >= 4 ? 'sequence_complete' : 'sent';\n\nreturn [{\n  json: {\n    lead_id: parsed.lead_id,\n    status: status,\n    last_sent_date: now,\n    send_count: String(newCount),\n    followup_1_sent: followup1 || undefined,\n    followup_2_sent: followup2 || undefined,\n    breakup_sent: breakup || undefined\n  }\n}];"
+      },
+      "id": "log-followup",
+      "name": "Log Follow-Up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        168
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "update-followup",
+      "name": "Update Follow-Up Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1520,
+        168
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "followup-delay",
+      "name": "Follow-Up Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1744,
+        240
+      ],
+      "webhookId": "followup-delay-001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconsole.log(\"Follow-up batch complete.\");\nreturn items;"
+      },
+      "id": "batch-complete",
+      "name": "Batch Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        -24
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## DIRECTIVE 06: Follow-Up Sequences\n\n**Trigger:** Daily at 9am OR manual\n**Logic:** Finds leads with status='sent', last_sent_date > 3 days ago, send_count < 3\n**Follow-up #1 (send_count=1):** Different value prop angle, 2-3 sentences, Re: original subject\n**Follow-up #2 (send_count=2):** Breakup email, 2 sentences max, zero pressure\n**After 3 total sends:** status = 'sequence_complete' (no more automated emails)\n**Safety:** 10 per batch, 5s delay between sends",
+        "height": 220,
+        "width": 2800,
+        "color": 2
+      },
+      "id": "sticky-followup",
+      "name": "Directive 06: Follow-Up",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        -304
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ewt-SoY1HPzc",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -944,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build raw RFC 2822 email for Gmail API threading\nconst followUp = $('Parse Follow-Up').first().json;\n\n// Skip if no valid data\nif (followUp._skip || !followUp.contact_email) {\n  return [{ json: { _skip: true, message: 'Skipped - no valid lead' } }];\n}\nconst fetchResult = $input.first().json;\n\n// Extract RFC 2822 Message-ID from fetched headers\nlet rfc2822MessageId = '';\ntry {\n  const headers = fetchResult.payload?.headers || [];\n  const msgIdHeader = headers.find(h => h.name === 'Message-Id' || h.name === 'Message-ID');\n  if (msgIdHeader) {\n    rfc2822MessageId = msgIdHeader.value;\n  }\n} catch (e) {\n  console.log('Could not extract Message-ID: ' + e.message);\n}\n\nconst toEmail = followUp.contact_email;\nconst subject = followUp._subject;\nconst threadId = followUp.gmail_thread_id || '';\n\nlet body = followUp._body || '';\nbody = body.replace(/\\\\n/g, '\\n');\nbody = body.replace(/\\r\\n/g, '\\n');\nbody = body.replace(/\\n\\n/g, '</p><p>');\nbody = body.replace(/\\n/g, '<br>');\nbody = '<p>' + body + '</p>';\n\nconst sig = `<br><br><table cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"font-family: Arial, sans-serif; font-size: 14px; color: #333333;\"><tr><td style=\"padding-right: 15px; vertical-align: top;\"><a href=\"http://www.shipday.com\" target=\"_blank\"><img src=\"YOUR_LOGO_IMAGE_URL\" alt=\"Shipday\" width=\"90\" style=\"display: block;\" /></a></td><td style=\"vertical-align: top;\"><strong style=\"font-size: 14px;\">Mike Paulus</strong><br><span style=\"color: #666666;\">Account Executive | Shipday</span><br><span style=\"color: #666666; font-style: italic;\">Increase revenue. Cut costs. Retain customers.</span><br><br><a href=\"https://calendly.com/mike-paulus-shipday/consultation\" style=\"color: #2a7ae2; text-decoration: none;\">Book a conversation here</a><br><span>(555) 555-5555</span><br><a href=\"mailto:your.email@company.com\" style=\"color: #2a7ae2; text-decoration: none;\">your.email@company.com</a></td></tr></table><br><a href=\"https://www.shipday.com/case-studies\" style=\"color: #2a7ae2; text-decoration: none; font-size: 13px;\">See How Zeppe&#39;s Pizzeria Went From 4.2 to 4.7 Stars on Google with Shipday</a>`;\n\nbody += sig;\n// Add tracking pixel for open tracking\nconst sendNum = followUp._send_count || followUp.send_count || '1';\nconst leadId = followUp.lead_id || '';\nconst pixel = '<img src=\"https://YOUR_N8N_DOMAIN/webhook/email-open?lid=' + encodeURIComponent(leadId) + '&sn=' + sendNum + '&t=' + Date.now() + '\" width=\"1\" height=\"1\" style=\"display:none\" alt=\"\" />';\nbody += pixel;\n\nconst htmlBody = '<html><body>' + body + '</body></html>';\n\nlet rawEmail = 'From: Mike Paulus <your.email@company.com>\\r\\n';\nrawEmail += 'To: ' + toEmail + '\\r\\n';\nrawEmail += 'Subject: ' + subject + '\\r\\n';\nrawEmail += 'Content-Type: text/html; charset=UTF-8\\r\\n';\nif (rfc2822MessageId) {\n  rawEmail += 'In-Reply-To: ' + rfc2822MessageId + '\\r\\n';\n  rawEmail += 'References: ' + rfc2822MessageId + '\\r\\n';\n}\nrawEmail += '\\r\\n' + htmlBody;\n\nconst encoded = Buffer.from(rawEmail).toString('base64url');\n\nconst payload = { raw: encoded };\nif (threadId) payload.threadId = threadId;\n\nreturn [{\n  json: {\n    ...followUp,\n    _gmail_payload: JSON.stringify(payload),\n    _debug_rfc2822_id: rfc2822MessageId,\n    _debug_thread_id: threadId\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        168
+      ],
+      "id": "build-raw-email",
+      "name": "Build Raw Email"
+    },
+    {
+      "parameters": {
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages/{{ $json.gmail_message_id }}?format=metadata&metadataHeaders=Message-ID",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        624,
+        168
+      ],
+      "id": "fetch-original-headers",
+      "name": "Fetch Original Headers",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Gmail"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Daily 9am Check": {
+      "main": [
+        [
+          {
+            "node": "Read All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read All Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter Due for Follow-Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Due for Follow-Up": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Follow-Ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Follow-Ups": {
+      "main": [
+        [
+          {
+            "node": "Batch Complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Follow-Up Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Follow-Up Prompt": {
+      "main": [
+        [
+          {
+            "node": "Claude Generate Follow-Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Generate Follow-Up": {
+      "main": [
+        [
+          {
+            "node": "Parse Follow-Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Follow-Up": {
+      "main": [
+        [
+          {
+            "node": "Fetch Original Headers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-Up Gmail": {
+      "main": [
+        [
+          {
+            "node": "Log Follow-Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Follow-Up": {
+      "main": [
+        [
+          {
+            "node": "Update Follow-Up Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Follow-Up Status": {
+      "main": [
+        [
+          {
+            "node": "Follow-Up Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Follow-Up Delay": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Follow-Ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Raw Email": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-Up Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Original Headers": {
+      "main": [
+        [
+          {
+            "node": "Build Raw Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

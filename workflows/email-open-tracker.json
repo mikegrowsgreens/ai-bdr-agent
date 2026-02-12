@@ -1,0 +1,292 @@
+{
+  "name": "Email Open Tracker",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "email-open",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "webhook-open",
+      "name": "Track Open",
+      "webhookId": "email-open-tracker"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract lead_id from query params and log the open\nconst query = $input.first().json.query || {};\nconst leadId = query.lid || '';\nconst sendNum = query.sn || '1';\n\nif (!leadId) {\n  return [{ json: { _skip: true } }];\n}\n\nconst now = new Date().toISOString();\n\nreturn [{\n  json: {\n    lead_id: leadId,\n    send_number: sendNum,\n    opened_at: now,\n    user_agent: $input.first().json.headers?.['user-agent'] || '',\n    _skip: false\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "id": "parse-open",
+      "name": "Parse Open Event"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ],
+      "id": "if-valid",
+      "name": "Has Lead ID?"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "lead_id",
+              "lookupValue": "={{ $json.lead_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        880,
+        200
+      ],
+      "id": "find-lead",
+      "name": "Find Lead Row",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "lead_id"
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "log-open",
+      "name": "Log Open to Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "GIF89a\u0001\u0000\u0001\u0000\u0080\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000!\u00f9\u0004\u0001\u0000\u0000\u0000\u0000,\u0000\u0000\u0000\u0000\u0001\u0000\u0001\u0000\u0000\u0002\u0002D\u0001\u0000;",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "image/gif"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store, no-cache, must-revalidate, max-age=0"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1400,
+        200
+      ],
+      "id": "respond-pixel",
+      "name": "Return Pixel"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "GIF89a\u0001\u0000\u0001\u0000\u0080\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000!\u00f9\u0004\u0001\u0000\u0000\u0000\u0000,\u0000\u0000\u0000\u0000\u0001\u0000\u0001\u0000\u0000\u0002\u0002D\u0001\u0000;",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "image/gif"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store, no-cache, must-revalidate, max-age=0"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        420
+      ],
+      "id": "respond-pixel-skip",
+      "name": "Return Pixel (Skip)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare update with open count\nconst openEvent = $('Parse Open Event').first().json;\nconst leadRow = $input.first().json;\n\nconst currentCount = parseInt(leadRow.email_open_count) || 0;\n\nreturn [{\n  json: {\n    lead_id: openEvent.lead_id,\n    email_opened_at: openEvent.opened_at,\n    email_open_count: String(currentCount + 1)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        200
+      ],
+      "id": "prepare-update",
+      "name": "Prepare Update"
+    }
+  ],
+  "connections": {
+    "Track Open": {
+      "main": [
+        [
+          {
+            "node": "Parse Open Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Open Event": {
+      "main": [
+        [
+          {
+            "node": "Has Lead ID?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Lead ID?": {
+      "main": [
+        [
+          {
+            "node": "Find Lead Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Pixel (Skip)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Lead Row": {
+      "main": [
+        [
+          {
+            "node": "Prepare Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Open to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Return Pixel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Update": {
+      "main": [
+        [
+          {
+            "node": "Log Open to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

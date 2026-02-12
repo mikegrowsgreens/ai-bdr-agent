@@ -1,0 +1,317 @@
+{
+  "name": "Directive 05: Email Outreach",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -608,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-ready",
+      "name": "Read Email-Ready Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -352,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter leads ready to send\nconst items = $input.all();\nconst BATCH_SIZE = 50;\n\n// Skip weekends (restaurant owners are busy Sat/Sun)\nconst dayOfWeek = new Date().getDay(); // 0=Sun, 6=Sat\nif (dayOfWeek === 0 || dayOfWeek === 6) {\n  return [];\n}\n\nconst ready = items.filter(item => {\n  const lead = item.json;\n  return lead.status === 'email_ready'\n    && lead.email_subject\n    && lead.email_body\n    && lead.contact_email;\n});\n\nconsole.log(`Found ${ready.length} email-ready leads`);\n\nconst batch = ready.slice(0, BATCH_SIZE);\nconsole.log(`Sending batch of ${batch.length}`);\n\nif (batch.length === 0) {\n  return [{ json: { _empty: true, message: 'No email-ready leads to send' } }];\n}\n\nreturn batch;"
+      },
+      "id": "filter-ready",
+      "name": "Filter Ready to Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -96,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "loop-sends",
+      "name": "Loop Over Sends",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        160,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.contact_email }}",
+        "subject": "={{ $json.email_subject }}",
+        "message": "={{ (() => { let body = $json.email_body || ''; body = body.replace(/\\r\\n/g, '\\n'); body = body.replace(/\\n\\n/g, '</p><p>'); body = body.replace(/\\n/g, '<br>'); body = '<p>' + body + '</p>'; body += '<br><br><table cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"font-family: Arial, sans-serif; font-size: 14px; color: #333333;\"><tr><td style=\"padding-right: 15px; vertical-align: top;\"><a href=\"http://www.shipday.com\" target=\"_blank\"><img src=\"YOUR_LOGO_IMAGE_URL\" alt=\"Shipday\" width=\"90\" style=\"display: block;\" /></a></td><td style=\"vertical-align: top;\"><strong style=\"font-size: 14px;\">Mike Paulus</strong><br><span style=\"color: #666666;\">Account Executive | Shipday</span><br><span style=\"color: #666666; font-style: italic;\">Increase revenue. Cut costs. Retain customers.</span><br><br><a href=\"https://calendly.com/mike-paulus-shipday/consultation\" style=\"color: #2a7ae2; text-decoration: none;\">Book a conversation here</a><br><span>(555) 555-5555</span><br><a href=\"mailto:your.email@company.com\" style=\"color: #2a7ae2; text-decoration: none;\">your.email@company.com</a></td></tr></table><br><a href=\"https://www.shipday.com/case-studies\" style=\"color: #2a7ae2; text-decoration: none; font-size: 13px;\">See How Zeppe&#39;s Pizzeria Went From 4.2 to 4.7 Stars on Google with Shipday</a>'; // Add tracking pixel\nconst leadId = $json.lead_id || '';\nconst pixel = '<img src=\"https://YOUR_N8N_DOMAIN/webhook/email-open?lid=' + encodeURIComponent(leadId) + '&sn=1&t=' + Date.now() + '\" width=\"1\" height=\"1\" style=\"display:none\" alt=\"\" />';\nbody += pixel;\nreturn body; })() }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Mike Paulus"
+        }
+      },
+      "id": "send-gmail",
+      "name": "Send Email via Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        400,
+        208
+      ],
+      "webhookId": "42d59eb6-d978-4414-97ec-cff2e5d8ca9c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log the send and prepare sheet update\nconst lead = $('Loop Over Sends').first().json;\nconst gmailResult = $input.first().json;\n\nconst now = new Date().toISOString().split('T')[0]; // YYYY-MM-DD\n\n// Capture Gmail message ID and thread ID for reply threading\nconst messageId = gmailResult.id || '';\nconst threadId = gmailResult.threadId || '';\n\nreturn [{\n  json: {\n    lead_id: lead.lead_id,\n    status: 'sent',\n    email_sent_at: now,\n    last_sent_date: now,\n    send_count: String((parseInt(lead.send_count) || 0) + 1),\n    gmail_message_id: messageId,\n    gmail_thread_id: threadId\n  }\n}];"
+      },
+      "id": "log-send",
+      "name": "Log Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "update-status",
+      "name": "Update Send Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        912,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "send-delay",
+      "name": "Send Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1152,
+        208
+      ],
+      "webhookId": "outreach-delay-001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconsole.log(\"Outreach batch complete.\");\nreturn items;"
+      },
+      "id": "batch-complete",
+      "name": "Batch Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## DIRECTIVE 05: Email Outreach (Gmail API)\n\n**Flow:** Read email_ready leads -> Send via Gmail (your.email@company.com) -> Log send date + increment send_count -> status = 'sent'\n**Safety:** 10 per batch, 5s delay between sends\n**REQUIRES:** Gmail OAuth2 credential for your.email@company.com\n**Columns updated:** status, last_sent_date, send_count",
+        "height": 200,
+        "width": 2000,
+        "color": 3
+      },
+      "id": "sticky-outreach",
+      "name": "Directive 05: Outreach",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        -256
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ewt-3OEjA1zh",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -944,
+        160
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Email-Ready Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Email-Ready Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter Ready to Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Ready to Send": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Sends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Sends": {
+      "main": [
+        [
+          {
+            "node": "Batch Complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Email via Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email via Gmail": {
+      "main": [
+        [
+          {
+            "node": "Log Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Send": {
+      "main": [
+        [
+          {
+            "node": "Update Send Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Send Status": {
+      "main": [
+        [
+          {
+            "node": "Send Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Delay": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Sends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Email-Ready Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

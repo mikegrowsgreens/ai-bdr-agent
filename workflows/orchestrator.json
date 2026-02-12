@@ -1,0 +1,814 @@
+{
+  "name": "AI Agent: Pipeline Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 16,
+              "triggerAtMinute": 32
+            }
+          ]
+        }
+      },
+      "id": "daily-trigger",
+      "name": "Daily 7am Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1200,
+        480
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-state",
+      "name": "Read Pipeline State",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -976,
+        528
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-config",
+      "name": "Read Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -976,
+        720
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const leads = $('Read Pipeline State').all();\n\nlet configRows = [];\ntry {\n  configRows = $('Read Config').all();\n} catch(e) {\n  configRows = [];\n}\n\n// Parse config - handle boolean TRUE, string \"TRUE\", \"true\", etc.\nconst config = {};\nlet configSource = 'none';\n\nif (configRows.length > 0) {\n  configSource = 'sheet';\n  for (const row of configRows) {\n    // Log raw row data for debugging\n    const rawKeys = Object.keys(row.json);\n    \n    // Try multiple possible column names (case variations)\n    let key = '';\n    let value = '';\n    for (const k of rawKeys) {\n      if (k.toLowerCase() === 'key') key = String(row.json[k] || '').trim().toLowerCase();\n      if (k.toLowerCase() === 'value') value = String(row.json[k] || '').trim().toLowerCase();\n    }\n    if (key) config[key] = value;\n  }\n}\n\n// FALLBACK: If config is empty (Read Config failed silently), default pause_outreach to true for safety\nif (Object.keys(config).length === 0) {\n  config['pause_outreach'] = 'true';\n  configSource = 'fallback_safety';\n}\n\nconst statusCounts = {};\nfor (const item of leads) {\n  const status = item.json.status || 'unknown';\n  statusCounts[status] = (statusCounts[status] || 0) + 1;\n}\n\nconst now = new Date();\nconst threeDaysAgo = new Date(now.getTime() - (3 * 24 * 60 * 60 * 1000));\nlet followUpDue = 0;\nfor (const item of leads) {\n  const lead = item.json;\n  if (lead.status === 'sent') {\n    const sendCount = parseInt(lead.send_count || '0') || 0;\n    if (sendCount < 3) {\n      const lastSent = lead.email_sent_at || lead.last_sent_date || '';\n      if (lastSent) {\n        const lastDate = new Date(lastSent);\n        if (lastDate < threeDaysAgo) followUpDue++;\n      }\n    }\n  }\n}\n\nconst dayOfWeek = now.getDay();\nconst dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dayOfWeek];\nconst isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;\nconst isSendDay = dayOfWeek >= 1 && dayOfWeek <= 4;\n\nconst pauseOutreach = config['pause_outreach'] === 'true' || config['pause_outreach'] === '1' || config['pause_outreach'] === 'yes';\n\nreturn [{ json: {\n  total_leads: leads.length,\n  status_counts: statusCounts,\n  pending_enrichment: statusCounts['pending_enrichment'] || 0,\n  enriched: statusCounts['enriched'] || 0,\n  scored: statusCounts['scored'] || 0,\n  email_ready: statusCounts['email_ready'] || 0,\n  sent: statusCounts['sent'] || 0,\n  sequence_complete: statusCounts['sequence_complete'] || 0,\n  follow_up_due: followUpDue,\n  day_of_week: dayName,\n  is_weekday: isWeekday,\n  is_send_day: isSendDay,\n  pause_outreach: pauseOutreach,\n  current_time: now.toISOString(),\n  config: config,\n  _config_source: configSource,\n  _config_rows_count: configRows.length,\n  _config_debug: JSON.stringify(configRows.map(r => r.json))\n}}];"
+      },
+      "id": "aggregate-state",
+      "name": "Aggregate Pipeline State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 1000, messages: [{ role: 'user', content: 'You are the AI Orchestrator for Shipday restaurant lead pipeline. Decide which directives to run.\\n\\nPIPELINE STATE:\\n' + JSON.stringify($json, null, 2) + '\\n\\nAVAILABLE DIRECTIVES:\\n1. DIRECTIVE_01_SOURCE: Discovers new leads via Toast scraper. Run if total_leads < 500 and pending_enrichment < 100.\\n2. DIRECTIVE_02_ENRICH: Google Places + Hunter.io enrichment. Run if pending_enrichment > 0.\\n3. DIRECTIVE_03_SCORE: Scores enriched leads (free, instant). Run if enriched > 0.\\n4. DIRECTIVE_04_EMAIL_GEN: Claude generates cold emails. Run if scored > 0 and email_ready == 0.\\n5. DIRECTIVE_05_OUTREACH: Sends via Gmail. Run if email_ready > 0 AND is_send_day true AND pause_outreach is false.\\n6. DIRECTIVE_06_FOLLOWUP: Follow-up emails. Run if follow_up_due > 0 AND is_send_day true AND pause_outreach is false.\\n\\nCRITICAL RULES:\\n- If pause_outreach is true, NEVER run DIRECTIVE_05_OUTREACH or DIRECTIVE_06_FOLLOWUP. This is a hard override. No exceptions.\\n- NEVER send (05/06) on Fri/Sat/Sun\\n- Skip 01 if pending_enrichment > 100\\n- Always enrich before score before email gen before outreach\\n- Max 20 emails/day for deliverability\\n- If email_ready > 0 and scored > 0, run D04 to generate emails for the scored leads before attempting outreach\\n\\nOUTPUT JSON only (no markdown):\\n{\"decisions\": [{\"directive\": \"DIRECTIVE_02_ENRICH\", \"run\": true, \"reason\": \"...\"}], \"run_order\": [\"DIRECTIVE_02_ENRICH\"], \"daily_summary\": \"...\"}' }] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "agent-decision",
+      "name": "AI Agent Decision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -528,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst state = $('Aggregate Pipeline State').first().json;\nlet decisions;\ntry {\n  const content = response.content?.[0]?.text || '';\n  let cleaned = content.trim().replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  decisions = JSON.parse(cleaned);\n} catch (e) {\n  decisions = { run_order: [], decisions: [], daily_summary: 'Agent parse error. No directives run.' };\n  if (state.pending_enrichment > 0) decisions.run_order.push('DIRECTIVE_02_ENRICH');\n  if (state.enriched > 0) decisions.run_order.push('DIRECTIVE_03_SCORE');\n}\nreturn [{ json: { ...decisions, _state: state } }];"
+      },
+      "id": "parse-decisions",
+      "name": "Parse Agent Decisions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $input.first().json;\nconst runOrder = plan.run_order || [];\nconst results = [];\nfor (const directive of runOrder) {\n  results.push({ json: { directive, daily_summary: plan.daily_summary, run_order: plan.run_order, _state: plan._state } });\n}\nif (results.length === 0) {\n  results.push({ json: { directive: 'NONE', daily_summary: plan.daily_summary, run_order: [], _state: plan._state } });\n}\nconsole.log('Executing ' + runOrder.length + ' directives: ' + runOrder.join(' -> '));\nreturn results;"
+      },
+      "id": "build-queue",
+      "name": "Build Execution Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "exec-loop",
+      "name": "Execute Sequentially",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        144,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.directive }}",
+                    "rightValue": "DIRECTIVE_01_SOURCE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "990d451e-03bc-42f4-b8fc-f06ba3811cec"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DIRECTIVE_01_SOURCE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.directive }}",
+                    "rightValue": "DIRECTIVE_02_ENRICH",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "b27050a7-4dfd-48c7-b2f6-e84dd9280aae"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DIRECTIVE_02_ENRICH"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.directive }}",
+                    "rightValue": "DIRECTIVE_03_SCORE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "264f82f5-4d1a-4826-b79a-189a8ba77b07"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DIRECTIVE_03_SCORE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.directive }}",
+                    "rightValue": "DIRECTIVE_04_EMAIL_GEN",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "7d9b85d9-76eb-4ea8-8e9a-7544a3be5a38"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DIRECTIVE_04_EMAIL_GEN"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.directive }}",
+                    "rightValue": "DIRECTIVE_05_OUTREACH",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "df450fbc-0c9b-4a39-9a39-ec6019eb3f28"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DIRECTIVE_05_OUTREACH"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.directive }}",
+                    "rightValue": "DIRECTIVE_06_FOLLOWUP",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "e03f2d04-8f54-49b2-84a4-a43af1e7ebf4"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DIRECTIVE_06_FOLLOWUP"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "directive-router",
+      "name": "Directive Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        368,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "Ye4TNrjMj4AMG8he",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "exec-d01",
+      "name": "Run D01 Source",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "J21QESaBcSGIZEQo",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "exec-d02",
+      "name": "Run D02 Enrich",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "dCGrRTbOzx6T6fD0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "exec-d03",
+      "name": "Run D03 Score",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "3GTeBVqbGVEPPj1d",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "exec-d04",
+      "name": "Run D04 Email Gen",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "3OEjA1zh5Bk6iIRU",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "exec-d05",
+      "name": "Run D05 Outreach",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "SoY1HPzcmcc6kTOl",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "exec-d06",
+      "name": "Run D06 Follow-Up",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconsole.log('Completed: ' + (item.directive || 'unknown'));\nreturn [item];"
+      },
+      "id": "log-exec",
+      "name": "Log Execution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst first = items[0]?.json || {};\nreturn [{ json: {\n  date: new Date().toISOString().split('T')[0],\n  time: new Date().toISOString(),\n  summary: first.daily_summary || 'Pipeline run complete',\n  total_leads: first._state?.total_leads || 0,\n  status_counts: JSON.stringify(first._state?.status_counts || {}),\n  directives_run: (first.run_order || []).join(', ') || 'None'\n}}];"
+      },
+      "id": "daily-summary",
+      "name": "Daily Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "daily_metrics",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "log-analytics",
+      "name": "Log to Analytics Tab",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        592,
+        -96
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## AI AGENT: Pipeline Orchestrator\n\n**Trigger:** Daily 7am OR manual\n**Step 1:** Read pipeline state (leads_master counts by status) + config tab\n**Step 2:** Claude AI analyzes state and decides which directives to run and in what order\n**Step 3:** Sequentially executes each directive via Execute Workflow nodes\n**Step 4:** Logs daily summary to analytics tab\n\n**Intelligence:** Skips outreach on weekends, checks quotas, respects config overrides, optimizes execution order\n**Config overrides:** Set pause_outreach=true, max_daily_sends=20, etc. in config tab",
+        "height": 300,
+        "width": 768,
+        "color": 5
+      },
+      "id": "sticky-orch",
+      "name": "AI Orchestrator",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        208
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 7am Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Pipeline State",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Pipeline State",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Pipeline State": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Pipeline State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Config": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Pipeline State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Pipeline State": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Decision": {
+      "main": [
+        [
+          {
+            "node": "Parse Agent Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Agent Decisions": {
+      "main": [
+        [
+          {
+            "node": "Build Execution Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Execution Queue": {
+      "main": [
+        [
+          {
+            "node": "Execute Sequentially",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Sequentially": {
+      "main": [
+        [
+          {
+            "node": "Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Directive Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Directive Router": {
+      "main": [
+        [
+          {
+            "node": "Run D01 Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run D02 Enrich",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run D03 Score",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run D04 Email Gen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run D05 Outreach",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run D06 Follow-Up",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run D01 Source": {
+      "main": [
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run D02 Enrich": {
+      "main": [
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run D03 Score": {
+      "main": [
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run D04 Email Gen": {
+      "main": [
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run D05 Outreach": {
+      "main": [
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run D06 Follow-Up": {
+      "main": [
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Execution": {
+      "main": [
+        [
+          {
+            "node": "Execute Sequentially",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Summary": {
+      "main": [
+        [
+          {
+            "node": "Log to Analytics Tab",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

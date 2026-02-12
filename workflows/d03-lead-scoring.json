@@ -1,0 +1,283 @@
+{
+  "name": "Directive 03: Lead Scoring",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -608,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-leads",
+      "name": "Read Enriched Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -384,
+        48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter to enriched leads that need scoring\nconst items = $input.all();\nconst toScore = items.filter(item => {\n  const status = item.json.status || '';\n  return status === 'enriched';\n});\n\nconsole.log(`Found ${toScore.length} enriched leads to score`);\n\nif (toScore.length === 0) {\n  return [{ json: { _empty: true, message: 'No enriched leads to score' } }];\n}\n\nreturn toScore;"
+      },
+      "id": "filter-enriched",
+      "name": "Filter Enriched",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Directive 03: Lead Scoring Algorithm (100-point scale)\n// Scores every enriched lead across 4 dimensions\n\n// Delivery-friendly cuisines (high likelihood of delivery orders)\nconst deliveryCuisines = new Set([\n  'pizza', 'chinese', 'thai', 'indian', 'mexican', 'japanese', 'sushi',\n  'korean', 'vietnamese', 'mediterranean', 'middle eastern', 'caribbean',\n  'wings', 'burger', 'sandwich', 'sub', 'poke', 'ramen', 'noodle',\n  'bbq', 'barbecue', 'chicken', 'seafood', 'asian', 'greek',\n  'persian', 'turkish', 'ethiopian', 'hawaiian', 'bowl'\n]);\n\n// Cuisines less likely to do delivery\nconst lowDeliveryCuisines = new Set([\n  'fine dining', 'steakhouse', 'wine bar', 'brewery', 'tapas',\n  'fondue', 'teppanyaki', 'omakase'\n]);\n\nconst items = $input.all();\nconst scored = [];\n\nfor (const item of items) {\n  const lead = item.json;\n  \n  // === SCORE_CONTACT (30 pts max) ===\n  let scoreContact = 0;\n  const email = (lead.contact_email || '').toLowerCase();\n  const contactName = lead.contact_name || '';\n  const confidence = parseInt(lead.contact_confidence) || 0;\n  \n  if (email && contactName && confidence >= 90) {\n    scoreContact = 30; // Named contact, high confidence\n  } else if (email && contactName) {\n    scoreContact = 22; // Named contact, lower confidence\n  } else if (email && confidence >= 70) {\n    scoreContact = 15; // Generic email (info@), decent confidence\n  } else if (email) {\n    scoreContact = 10; // Any email\n  }\n  // Has secondary contact bonus\n  if (lead.contact_2_email) {\n    scoreContact = Math.min(30, scoreContact + 3);\n  }\n  \n  // === SCORE_BUSINESS (30 pts max) ===\n  let scoreBusiness = 0;\n  const rating = parseFloat(lead.google_rating) || 0;\n  const reviews = parseInt(lead.google_review_count) || 0;\n  const priceLevel = lead.google_price_level || '';\n  const website = lead.website || '';\n  const rootDomain = lead.root_domain || '';\n  \n  // Rating (10 pts)\n  if (rating >= 4.5) scoreBusiness += 10;\n  else if (rating >= 4.0) scoreBusiness += 8;\n  else if (rating >= 3.5) scoreBusiness += 5;\n  else if (rating > 0) scoreBusiness += 2;\n  \n  // Review volume (10 pts) - proxy for business size/activity\n  if (reviews >= 1000) scoreBusiness += 10;\n  else if (reviews >= 500) scoreBusiness += 8;\n  else if (reviews >= 200) scoreBusiness += 6;\n  else if (reviews >= 50) scoreBusiness += 3;\n  else if (reviews > 0) scoreBusiness += 1;\n  \n  // Price level (5 pts) - $$ sweet spot for delivery\n  if (priceLevel === '$$') scoreBusiness += 5;\n  else if (priceLevel === '$') scoreBusiness += 4;\n  else if (priceLevel === '$$$') scoreBusiness += 3;\n  else if (priceLevel === '$$$$') scoreBusiness += 1;\n  \n  // Real website (5 pts)\n  if (website && rootDomain && !rootDomain.includes('toasttab.com')) {\n    scoreBusiness += 5;\n  } else if (website) {\n    scoreBusiness += 2;\n  }\n  \n  // === SCORE_TECHSTACK (20 pts max) ===\n  let scoreTechstack = 0;\n  const posName = (lead.pos_name || '').toLowerCase();\n  const sourceUrl = (lead.source_url || '').toLowerCase();\n  \n  // Uses Toast POS (15 pts) - confirmed integration target\n  if (posName === 'toast' || sourceUrl.includes('toasttab.com')) {\n    scoreTechstack += 15;\n  }\n  \n  // Has online ordering presence (5 pts)\n  if (sourceUrl.includes('order') || sourceUrl.includes('toasttab.com')) {\n    scoreTechstack += 5;\n  }\n  \n  // === SCORE_DELIVERY (20 pts max) ===\n  let scoreDelivery = 0;\n  const cuisineRaw = (lead.cuisine_type || '').toLowerCase();\n  const cuisineTypes = cuisineRaw.split(/[,\\/]/).map(c => c.trim());\n  \n  // Cuisine delivery-friendliness (10 pts)\n  let cuisineMatch = false;\n  for (const c of cuisineTypes) {\n    for (const dc of deliveryCuisines) {\n      if (c.includes(dc)) { cuisineMatch = true; break; }\n    }\n    if (cuisineMatch) break;\n  }\n  \n  let lowDelivery = false;\n  for (const c of cuisineTypes) {\n    for (const ldc of lowDeliveryCuisines) {\n      if (c.includes(ldc)) { lowDelivery = true; break; }\n    }\n    if (lowDelivery) break;\n  }\n  \n  if (cuisineMatch) scoreDelivery += 10;\n  else if (!lowDelivery && cuisineRaw) scoreDelivery += 5; // Unknown but has cuisine\n  else if (lowDelivery) scoreDelivery += 1;\n  \n  // Price in delivery sweet spot (5 pts)\n  if (priceLevel === '$' || priceLevel === '$$') scoreDelivery += 5;\n  else if (priceLevel === '$$$') scoreDelivery += 2;\n  \n  // High volume indicator (5 pts)\n  if (reviews >= 500) scoreDelivery += 5;\n  else if (reviews >= 200) scoreDelivery += 3;\n  else if (reviews >= 50) scoreDelivery += 1;\n  \n  // === COMPOSITE ===\n  const totalScore = scoreContact + scoreBusiness + scoreTechstack + scoreDelivery;\n  \n  scored.push({\n    json: {\n      lead_id: lead.lead_id,\n      score: String(totalScore),\n      score_contact: String(scoreContact),\n      score_business: String(scoreBusiness),\n      score_techstack: String(scoreTechstack),\n      score_delivery: String(scoreDelivery),\n      status: 'scored'\n    }\n  });\n}\n\n// Sort by score descending for logging\nscored.sort((a, b) => parseInt(b.json.score) - parseInt(a.json.score));\nconsole.log(`Scored ${scored.length} leads. Top score: ${scored[0]?.json.score}, Lowest: ${scored[scored.length-1]?.json.score}`);\n\nreturn scored;"
+      },
+      "id": "score-leads",
+      "name": "Score All Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 50,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "batch-updates",
+      "name": "Batch Updates",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        288,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "update-scores",
+      "name": "Update Scores",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        512,
+        48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "batch-delay",
+      "name": "Batch Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        736,
+        120
+      ],
+      "webhookId": "scoring-delay-001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Scoring complete summary\nconst items = $input.all();\nconsole.log(\"Scoring complete. All leads updated.\");\nreturn items;"
+      },
+      "id": "scoring-complete",
+      "name": "Scoring Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## DIRECTIVE 03: Lead Scoring (100-point scale)\n\n**Dimensions:** Contact (30) + Business (30) + TechStack (20) + Delivery (20)\n**Input:** Enriched leads from Directive 02\n**Output:** score, score_contact, score_business, score_techstack, score_delivery, status='scored'\n**Batch:** Scores all enriched leads at once, writes in batches of 50",
+        "height": 200,
+        "width": 1700,
+        "color": 6
+      },
+      "id": "sticky-scoring",
+      "name": "Directive 03: Scoring",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -290,
+        -184
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ewt-dCGrRTbO",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -858,
+        216
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Enriched Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Enriched Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter Enriched",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Enriched": {
+      "main": [
+        [
+          {
+            "node": "Score All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score All Leads": {
+      "main": [
+        [
+          {
+            "node": "Batch Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Updates": {
+      "main": [
+        [
+          {
+            "node": "Scoring Complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Scores": {
+      "main": [
+        [
+          {
+            "node": "Batch Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Delay": {
+      "main": [
+        [
+          {
+            "node": "Batch Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Enriched Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

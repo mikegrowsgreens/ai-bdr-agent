@@ -1,0 +1,551 @@
+{
+  "name": "Directive 02: Enrichment Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-pending",
+      "name": "Read Pending Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1376,
+        -16
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter leads that need enrichment and limit batch size\nconst BATCH_SIZE = 50;\n\nconst items = $input.all();\nconst pending = items.filter(item => {\n  const status = item.json.status || '';\n  const placeId = item.json.google_place_id || '';\n  \n  // Pick up: pending_enrichment OR enriched-but-missing-google-data\n  return status === 'pending_enrichment' || \n         (status === 'enriched' && !placeId);\n});\n\nconsole.log(`Found ${pending.length} leads needing enrichment, processing ${Math.min(BATCH_SIZE, pending.length)}`);\n\nconst batch = pending.slice(0, BATCH_SIZE);\n\nif (batch.length === 0) {\n  return [{ json: { _empty: true, message: 'No leads to enrich' } }];\n}\n\nreturn batch;"
+      },
+      "id": "filter-pending",
+      "name": "Filter & Limit Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1152,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "loop-items",
+      "name": "Loop Over Leads",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -928,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://places.googleapis.com/v1/places:searchText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Goog-Api-Key",
+              "value": "YOUR_GOOGLE_API_KEY"
+            },
+            {
+              "name": "X-Goog-FieldMask",
+              "value": "places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.priceLevel,places.types,places.googleMapsUri"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"textQuery\": $json.business_name + \" \" + ($json.city || \"\") + \" \" + ($json.state || \"\"), \"locationBias\": { \"rectangle\": { \"low\": { \"latitude\": 24.0, \"longitude\": -125.0 }, \"high\": { \"latitude\": 72.0, \"longitude\": -66.0 } } }, \"maxResultCount\": 1 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "google-places-search",
+      "name": "Google Places Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -704,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v3 - Parse Google Places result - all fields type-safe\nconst lead = $('Loop Over Leads').first().json;\nconst placesResponse = $input.first().json;\n\nconst places = placesResponse.places;\nconst place = (Array.isArray(places) && places.length > 0) ? places[0] : {};\n\n// Safe string getter\nfunction str(val) {\n  if (val === null || val === undefined) return '';\n  if (typeof val === 'string') return val;\n  if (typeof val === 'object' && val.text) return String(val.text);\n  return String(val);\n}\n\n// Parse address\nlet city = str(lead.city);\nlet state = str(lead.state);\nconst formattedAddress = str(place.formattedAddress);\n\nif (formattedAddress && (!city || !state)) {\n  const parts = formattedAddress.split(',').map(p => p.trim());\n  if (parts.length >= 3) {\n    city = city || parts[parts.length - 3] || '';\n    const stateZip = parts[parts.length - 2] || '';\n    const stateMatch = stateZip.match(/([A-Z]{2})/);\n    state = state || (stateMatch ? stateMatch[1] : '');\n  }\n}\n\n// Website\nconst website = str(place.websiteUri) || str(lead.website);\nlet rootDomain = '';\nif (website) {\n  rootDomain = website.toLowerCase()\n    .replace(/^https?:\\/\\//, '')\n    .replace(/^www\\./, '')\n    .split('/')[0].split('?')[0];\n}\n\n// Phone\nconst phone = str(place.nationalPhoneNumber || lead.phone).replace(/[^0-9]/g, '').slice(-10);\n\nconst enriched = {\n  lead_id: str(lead.lead_id),\n  row_number: lead.row_number,\n  business_name: str(lead.business_name),\n  normalized_name: str(lead.normalized_name),\n  address: formattedAddress || str(lead.address),\n  city: city,\n  state: state,\n  phone: phone,\n  website: website,\n  root_domain: rootDomain || str(lead.root_domain),\n  google_rating: place.rating != null ? String(place.rating) : '',\n  google_review_count: place.userRatingCount != null ? String(place.userRatingCount) : '',\n  google_price_level: (() => {\n      const pl = str(place.priceLevel);\n      const map = {\n        'PRICE_LEVEL_FREE': 'Free',\n        'PRICE_LEVEL_INEXPENSIVE': '$',\n        'PRICE_LEVEL_MODERATE': '$$',\n        'PRICE_LEVEL_EXPENSIVE': '$$$',\n        'PRICE_LEVEL_VERY_EXPENSIVE': '$$$$'\n      };\n      return map[pl] || pl;\n    })(),\n  google_place_id: str(place.id),\n  source: str(lead.source),\n  source_url: str(lead.source_url),\n  cuisine_type: str(lead.cuisine_type) || (Array.isArray(place.types) ? place.types.join(', ') : ''),\n  territory: str(lead.territory) || 'west',\n  pos_name: str(lead.pos_name),\n  pos_confidence: str(lead.pos_confidence),\n  _places_found: place.id ? true : false,\n  _has_website: website ? true : false\n};\n\nreturn [{ json: enriched }];"
+      },
+      "id": "parse-places",
+      "name": "Parse Places Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if we should call Hunter and prepare the request\nconst lead = $input.first().json;\nconst domain = lead.root_domain || '';\n\nconst skipDomains = ['toasttab.com', 'doordash.com', 'ubereats.com', 'grubhub.com', \n                     'yelp.com', 'facebook.com', 'instagram.com', 'google.com',\n                     'squarespace.com', 'wix.com', 'godaddy.com', 'quiznos.com',\n                     'subway.com', 'mcdonalds.com'];\n\nconst shouldSkip = !domain || skipDomains.some(d => domain.includes(d));\n\nreturn [{ json: { \n  ...lead, \n  _hunter_skip: shouldSkip,\n  _hunter_domain: domain\n} }];"
+      },
+      "id": "hunter-check",
+      "name": "Hunter Check Domain",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -256,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate enrichment completeness score (0-1)\nconst lead = $input.first().json;\n\nlet score = 0;\nlet maxScore = 10;\n\n// Core fields (higher weight)\nif (lead.phone) score += 1.5;\nif (lead.website && !lead.website.includes('toasttab.com')) score += 1.5;\nif (lead.city) score += 1;\nif (lead.state) score += 0.5;\nif (lead.address) score += 0.5;\n\n// Google Places data\nif (lead.google_place_id) score += 1;\nif (lead.google_rating) score += 1;\nif (lead.google_review_count) score += 0.5;\n\n// Contact data (highest value)\nif (lead.contact_email) score += 2;\nif (lead.contact_name) score += 0.5;\n\nconst completeness = Math.round((score / maxScore) * 100) / 100;\n\nreturn [{ json: {\n  ...lead,\n  enrichment_completeness: String(completeness),\n  status: 'enriched'\n} }];"
+      },
+      "id": "calc-completeness",
+      "name": "Calculate Completeness",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare the update payload for Google Sheets\n// We need to find and update the existing row by lead_id\nconst lead = $input.first().json;\n\nreturn [{ json: {\n  lead_id: lead.lead_id,\n  address: lead.address || '',\n  city: lead.city || '',\n  state: lead.state || '',\n  phone: lead.phone || '',\n  website: lead.website || '',\n  root_domain: lead.root_domain || '',\n  cuisine_type: lead.cuisine_type || '',\n  google_rating: lead.google_rating || '',\n  google_review_count: lead.google_review_count || '',\n  google_price_level: lead.google_price_level || '',\n  google_place_id: lead.google_place_id || '',\n  contact_name: lead.contact_name || '',\n  contact_title: lead.contact_title || '',\n  contact_email: lead.contact_email || '',\n  contact_confidence: lead.contact_confidence || '',\n  contact_verified: lead.contact_verified || '',\n  contact_2_name: lead.contact_2_name || '',\n  contact_2_email: lead.contact_2_email || '',\n  enrichment_completeness: lead.enrichment_completeness || '',\n  status: lead.status || 'enriched'\n} }];"
+      },
+      "id": "prepare-update",
+      "name": "Prepare Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "leads_master",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "update-sheet",
+      "name": "Update leads_master",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1088,
+        -16
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Shipday - Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "rate-limit-delay",
+      "name": "Rate Limit Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1312,
+        56
+      ],
+      "webhookId": "enrichment-delay-001"
+    },
+    {
+      "parameters": {
+        "content": "## DIRECTIVE 02: Enrichment Pipeline (Shipday Outbound System v2.0)\n\n**Flow:** Read pending leads -> Filter batch (10 for test) -> Loop: Google Places -> Hunter.io -> Completeness Score -> Update Sheet -> Delay -> Next\n\n**API Keys:** Google Places (v1 Text Search), Hunter.io (domain search), Serper (future: tech stack)\n**Output:** Updated leads in leads_master with status 'enriched' and enrichment_completeness score\n**Next:** Qualification workflow (Directive 03) picks up enriched leads for scoring",
+        "height": 250,
+        "width": 2700,
+        "color": 4
+      },
+      "id": "sticky-enrichment",
+      "name": "Directive 02: Enrichment",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2006,
+        -298
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enrichment complete summary\nconst items = $input.all();\nconsole.log(`Enrichment batch complete. ${items.length} leads processed.`);\nreturn items;"
+      },
+      "id": "batch-complete",
+      "name": "Batch Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ \"https://api.hunter.io/v2/domain-search?domain=\" + $json._hunter_domain + \"&limit=2&api_key=a6060eaa5fb6efdff7f49721082e84dd8af5749e\" }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "hunter-http",
+      "name": "Hunter API Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        192,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "hunter-skip-check",
+              "leftValue": "={{ $json._hunter_skip }}",
+              "rightValue": "={{ false }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "hunter-if",
+      "name": "Has Valid Domain?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -32,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Hunter.io response and merge with lead data\nconst lead = $('Hunter Check Domain').first().json;\nconst hunterResponse = $input.first().json;\n\nconst data = hunterResponse.data || {};\nconst emails = data.emails || [];\n\nlet contact_name = '';\nlet contact_title = '';\nlet contact_email = '';\nlet contact_confidence = '';\nlet contact_verified = '';\nlet contact_2_name = '';\nlet contact_2_email = '';\n\nif (emails.length > 0) {\n  const primary = emails[0];\n  contact_name = [primary.first_name, primary.last_name].filter(Boolean).join(' ');\n  contact_title = primary.position || '';\n  contact_email = primary.value || '';\n  contact_confidence = primary.confidence != null ? String(primary.confidence) : '';\n  contact_verified = primary.verification ? primary.verification.status || '' : '';\n  \n  if (emails.length > 1) {\n    const secondary = emails[1];\n    contact_2_name = [secondary.first_name, secondary.last_name].filter(Boolean).join(' ');\n    contact_2_email = secondary.value || '';\n  }\n}\n\nreturn [{ json: {\n  ...lead,\n  contact_name,\n  contact_title,\n  contact_email,\n  contact_confidence,\n  contact_verified,\n  contact_2_name,\n  contact_2_email\n} }];"
+      },
+      "id": "hunter-parse",
+      "name": "Parse Hunter Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// No valid domain for Hunter - pass through with empty contacts\nconst lead = $input.first().json;\nreturn [{ json: {\n  ...lead,\n  contact_name: lead.contact_name || '',\n  contact_title: lead.contact_title || '',\n  contact_email: lead.contact_email || '',\n  contact_confidence: lead.contact_confidence || '',\n  contact_verified: lead.contact_verified || '',\n  contact_2_name: lead.contact_2_name || '',\n  contact_2_email: lead.contact_2_email || ''\n} }];"
+      },
+      "id": "hunter-skip",
+      "name": "Skip Hunter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        -112
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ewt-J21QESaB",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2256,
+        102
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Pending Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter & Limit Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Limit Batch": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Leads": {
+      "main": [
+        [
+          {
+            "node": "Batch Complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Places Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Places Search": {
+      "main": [
+        [
+          {
+            "node": "Parse Places Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Places Result": {
+      "main": [
+        [
+          {
+            "node": "Hunter Check Domain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hunter Email Search": {
+      "main": [
+        [
+          {
+            "node": "Calculate Completeness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Completeness": {
+      "main": [
+        [
+          {
+            "node": "Prepare Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Update": {
+      "main": [
+        [
+          {
+            "node": "Update leads_master",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update leads_master": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Delay": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Complete": {
+      "main": [
+        []
+      ]
+    },
+    "Hunter Check Domain": {
+      "main": [
+        [
+          {
+            "node": "Has Valid Domain?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Valid Domain?": {
+      "main": [
+        [
+          {
+            "node": "Hunter API Call",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Hunter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hunter API Call": {
+      "main": [
+        [
+          {
+            "node": "Parse Hunter Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Hunter Result": {
+      "main": [
+        [
+          {
+            "node": "Calculate Completeness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Hunter": {
+      "main": [
+        [
+          {
+            "node": "Calculate Completeness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}
